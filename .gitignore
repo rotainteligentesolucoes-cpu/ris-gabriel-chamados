@@ -1,0 +1,47 @@
+# Ambientes e caches
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Segredos e variaveis locais
+.env
+backend/.env
+*.local
+
+# Protótipos antigos com chaves ou codigo legado
+app.py
+backend/app/
+
+# Bancos locais
+*.db
+backend/instance/
+instance/
+
+# Logs e arquivos temporarios
+*.log
+server-start*.log
+cloudflared*.log
+logs/
+
+# Uploads e dados operacionais de clientes
+uploads/
+backend/uploads/
+RESULTADO/
+DADOS/*.xlsx
+clientes.xlsx
+
+# Backups e arquivos antigos
+RIS BACKUP/
+backup-*/
+backend/backup-*/
+*.bak
+*.bak*
+
+# Sistema operacional e editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

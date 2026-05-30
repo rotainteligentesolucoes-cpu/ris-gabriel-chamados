@@ -1,0 +1,97 @@
+from database.database import db
+
+
+class SubscriptionPlan(db.Model):
+    __tablename__ = "subscription_plans"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False, unique=True)
+    description = db.Column(db.Text, nullable=True)
+    monthly_price = db.Column(db.Float, default=0)
+    max_companies = db.Column(db.Integer, nullable=True)
+    max_bases = db.Column(db.Integer, nullable=True)
+    max_users = db.Column(db.Integer, nullable=True)
+    max_routes_month = db.Column(db.Integer, nullable=True)
+    features_json = db.Column(db.Text, nullable=True)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "monthly_price": self.monthly_price,
+            "max_companies": self.max_companies,
+            "max_bases": self.max_bases,
+            "max_users": self.max_users,
+            "max_routes_month": self.max_routes_month,
+            "features_json": self.features_json,
+            "active": self.active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class CompanySubscription(db.Model):
+    __tablename__ = "company_subscriptions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
+    plan_id = db.Column(db.Integer, db.ForeignKey("subscription_plans.id"), nullable=True)
+    status = db.Column(db.String(40), default="trial", nullable=False)
+    billing_email = db.Column(db.String(255), nullable=True)
+    start_date = db.Column(db.String(10), nullable=True)
+    end_date = db.Column(db.String(10), nullable=True)
+    renewal_day = db.Column(db.Integer, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
+
+    company = db.relationship("Company")
+    plan = db.relationship("SubscriptionPlan")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "company_id": self.company_id,
+            "plan_id": self.plan_id,
+            "status": self.status,
+            "billing_email": self.billing_email,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "renewal_day": self.renewal_day,
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AuditLog(db.Model):
+    __tablename__ = "audit_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    action = db.Column(db.String(120), nullable=False)
+    resource_type = db.Column(db.String(120), nullable=True)
+    resource_id = db.Column(db.String(80), nullable=True)
+    ip_address = db.Column(db.String(64), nullable=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    details = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    company = db.relationship("Company")
+    user = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "company_id": self.company_id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "resource_type": self.resource_type,
+            "resource_id": self.resource_id,
+            "ip_address": self.ip_address,
+            "details": self.details,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
