@@ -1387,6 +1387,8 @@ def guided_implementation_page():
             f"<option value='{company.id}' {'selected' if company.id == selected_company_id else ''}>{escape(company.name)}</option>"
             for company in companies
         )
+        if not company_options:
+            company_options = "<option value=''>Nenhuma empresa cadastrada</option>"
     base_selector = ""
     if selected_company_id and (user.is_master or role_level(user) >= 2):
         base_selector = f"""
@@ -1439,6 +1441,15 @@ def guided_implementation_page():
     launch_ready = all(step["done"] for step in steps[:7])
     launch_badge = "Pronto para vender" if launch_ready else "Implantacao em andamento"
     launch_text = "O cliente ja tem estrutura operacional para demonstracao e uso acompanhado." if launch_ready else "Complete o proximo passo para transformar os modulos em uma jornada comercial clara."
+    empty_company_notice = ""
+    if user.is_master and not companies:
+        empty_company_notice = """
+        <div class="card" style="margin-bottom:16px; border-color:#f59e0b;">
+            <h2>Nenhuma empresa cadastrada</h2>
+            <p class="muted">Este ambiente de producao esta limpo. Cadastre a primeira empresa cliente para liberar o checklist de implantacao.</p>
+            <a class="btn" href="/web/empresas">Cadastrar primeira empresa</a>
+        </div>
+        """
 
     body = f"""
     <style>
@@ -1481,6 +1492,7 @@ def guided_implementation_page():
             .step-action {{ grid-column:2; width:100%; text-align:center; }}
         }}
     </style>
+    {empty_company_notice}
     {filter_form}
     <section class="implant-hero">
         <div class="implant-progress">
@@ -2136,14 +2148,59 @@ def export_dashboard_excel():
     output.seek(0)
     return send_file(output, as_attachment=True, download_name="dashboard_ris.xlsx", mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-@web_bp.route("/web/empresas")
+@web_bp.route("/web/empresas", methods=["GET", "POST"])
 @web_login_required
 def companies_page():
     user = request.web_user
     if not can_see_master(user):
         return layout("Acesso negado", "<div class='card'><h2>Acesso administrativo restrito.</h2></div>", "empresas"), 403
-    rows = "".join(f"<tr><td>{company.id}</td><td>{company.name}</td><td>{company.email}</td><td><span class='badge badge-success'>{'Ativa' if company.active else 'Inativa'}</span></td></tr>" for company in Company.query.order_by(Company.name).all())
-    return layout("Empresas", f"<div class='card'><table class='table'><thead><tr><th>ID</th><th>Empresa</th><th>Email</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></div>", "empresas")
+    notice = ""
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        email = (request.form.get("email") or "").strip().lower()
+        if not name or not email:
+            notice = "<div class='badge badge-danger'>Informe nome da empresa e e-mail.</div>"
+        elif Company.query.filter_by(email=email).first():
+            notice = "<div class='badge badge-danger'>Ja existe empresa cadastrada com este e-mail.</div>"
+        else:
+            company = Company(name=name, email=email, active=True)
+            db.session.add(company)
+            db.session.flush()
+            plan = SubscriptionPlan.query.filter_by(active=True).order_by(SubscriptionPlan.monthly_price.desc()).first()
+            db.session.add(CompanySubscription(
+                company_id=company.id,
+                plan_id=plan.id if plan else None,
+                status="trial",
+                billing_email=email,
+                notes="Empresa criada pelo painel master.",
+            ))
+            audit_event("company_create", user=user, company_id=company.id, resource_type="company", resource_id=company.id, details=name)
+            db.session.commit()
+            return redirect(url_for("web_bp.guided_implementation_page", company_id=company.id))
+    companies = Company.query.order_by(Company.name).all()
+    rows = "".join(
+        f"<tr><td>{company.id}</td><td>{escape(company.name)}</td><td>{escape(company.email)}</td><td><span class='badge badge-success'>{'Ativa' if company.active else 'Inativa'}</span></td><td><a class='btn small' href='/web/implantacao?company_id={company.id}'>Implantacao</a></td></tr>"
+        for company in companies
+    )
+    if not rows:
+        rows = "<tr><td colspan='5'>Nenhuma empresa cadastrada ainda.</td></tr>"
+    body = f"""
+    <div class='card'>
+        <h2>Cadastrar nova empresa cliente</h2>
+        <p class='muted'>Use esta tela para iniciar um novo cliente SaaS. Depois o checklist guiado ajuda a cadastrar bases, colaboradores, pontos, rotas e relatorios.</p>
+        {notice}
+        <form method='post' class='grid' style='margin-top:12px;'>
+            <label>Nome da empresa</label><input name='name' required placeholder='Ex.: Transportadora Cliente'>
+            <label>E-mail principal / cobranca</label><input name='email' type='email' required placeholder='financeiro@empresa.com.br'>
+            <button class='btn' type='submit'>Cadastrar empresa</button>
+        </form>
+    </div>
+    <div class='card' style='margin-top:16px;'>
+        <h2>Empresas cadastradas</h2>
+        <table class='table'><thead><tr><th>ID</th><th>Empresa</th><th>Email</th><th>Status</th><th>Acao</th></tr></thead><tbody>{rows}</tbody></table>
+    </div>
+    """
+    return layout("Empresas", body, "empresas")
 
 
 @web_bp.route("/web/rotas")
