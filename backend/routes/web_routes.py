@@ -1918,12 +1918,17 @@ def collaborators_page():
         if can_change_status:
             action_label = "Desativar" if item.active else "Reativar"
             action = f"""
-            <form method='post' action='/web/colaboradores/status'>
-                <input type='hidden' name='user_id' value='{item.id}'>
-                <input type='hidden' name='company_id' value='{selected_company_id or ""}'>
-                <button class='mini-btn {"danger" if item.active else ""}' type='submit'>{action_label}</button>
-            </form>
+            <div class='action-stack'>
+                <a class='mini-btn' href='/web/colaboradores/{item.id}/editar?company_id={selected_company_id or ""}'>Editar</a>
+                <form method='post' action='/web/colaboradores/status'>
+                    <input type='hidden' name='user_id' value='{item.id}'>
+                    <input type='hidden' name='company_id' value='{selected_company_id or ""}'>
+                    <button class='mini-btn {"danger" if item.active else ""}' type='submit'>{action_label}</button>
+                </form>
+            </div>
             """
+        elif item.id != user.id:
+            action = f"<a class='mini-btn' href='/web/colaboradores/{item.id}/editar?company_id={selected_company_id or ''}'>Editar</a>"
         rows += f"""
         <tr>
             <td><strong>{escape(item.name)}</strong><br><span class='muted'>{escape(item.email)}</span></td>
@@ -1957,6 +1962,8 @@ def collaborators_page():
         .collab-form input,.collab-form select,.collab-filter select {{ width:100%; border:1px solid #cfd8e3; border-radius:7px; padding:10px; font:inherit; }}
         .collab-form label,.collab-filter label {{ font-weight:800; color:#0b1f3a; font-size:13px; }}
         .collab-filter {{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin-bottom:12px; }}
+        .action-stack {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; }}
+        .action-stack form {{ margin:0; }}
         .client-notice.danger {{ background:#fef3f2; color:#b42318; border:1px solid #fda29b; }}
         @media(max-width:900px) {{ .collab-grid {{ grid-template-columns:1fr; }} .collab-filter {{ display:block; }} }}
     </style>
@@ -1989,6 +1996,120 @@ def collaborators_page():
     </div>
     """
     return layout("Colaboradores", body, "colaboradores")
+
+
+@web_bp.route("/web/colaboradores/<int:collaborator_id>/editar", methods=["GET", "POST"])
+@web_login_required
+def collaborator_edit_page(collaborator_id):
+    user = request.web_user
+    if not can_manage_collaborators(user):
+        return layout("Acesso negado", "<div class='card'><h2>Cadastro de colaboradores disponivel para perfis administrativos autorizados.</h2></div>", "colaboradores"), 403
+
+    collaborator = User.query.get_or_404(collaborator_id)
+    if collaborator.id == user.id:
+        return layout("Colaboradores", "<div class='card'><h2>Use redefinir senha ou seu cadastro principal para alterar o proprio usuario.</h2><a class='btn' href='/web/colaboradores'>Voltar</a></div>", "colaboradores"), 400
+    if not user.is_master:
+        if collaborator.company_id != user.company_id or role_level(collaborator) >= role_level(user):
+            return layout("Acesso negado", "<div class='card'><h2>Voce nao pode editar este colaborador.</h2></div>", "colaboradores"), 403
+        if getattr(user, "base_id", None) and role_level(user) < 3 and collaborator.base_id != user.base_id:
+            return layout("Acesso negado", "<div class='card'><h2>Colaborador fora da sua base.</h2></div>", "colaboradores"), 403
+
+    selected_company_id = request.form.get("company_id", type=int) if request.method == "POST" else (request.args.get("company_id", type=int) or collaborator.company_id)
+    message = ""
+    if request.method == "POST":
+        try:
+            name = (request.form.get("name") or "").strip()
+            email = (request.form.get("email") or "").strip().lower()
+            role = (request.form.get("role") or "operator").strip().lower()
+            base_id = request.form.get("base_id", type=int)
+            password = request.form.get("password", "")
+            active = request.form.get("active") == "on"
+
+            if not name or not email:
+                raise ValueError("Informe nome e login.")
+            if not can_assign_role(user, role):
+                raise ValueError("Seu perfil nao pode atribuir este tipo de usuario.")
+            if not user.is_master and role == "master":
+                raise ValueError("Perfil master e restrito a administracao da plataforma.")
+            if role != "master":
+                if not selected_company_id:
+                    raise ValueError("Selecione a empresa.")
+                if not can_access_company(user, selected_company_id):
+                    raise ValueError("Empresa fora da sua permissao.")
+            if not user.is_master and getattr(user, "base_id", None) and role_level(user) < 3:
+                base_id = user.base_id
+            if base_id and not can_access_base(user, base_id):
+                raise ValueError("Base fora da sua permissao.")
+            existing = User.query.filter(User.email == email, User.id != collaborator.id).first()
+            if existing:
+                raise ValueError("Este login ja esta cadastrado em outro usuario.")
+            if password:
+                if len(password) < 6:
+                    raise ValueError("Use uma senha com pelo menos 6 caracteres.")
+                collaborator.password = generate_password_hash(password)
+                collaborator.active_session_id = None
+                collaborator.active_session_started_at = None
+                collaborator.active_session_ip = None
+                collaborator.active_session_user_agent = None
+
+            collaborator.name = name
+            collaborator.email = email
+            collaborator.role = role
+            collaborator.company_id = None if role == "master" else selected_company_id
+            collaborator.base_id = None if role == "master" else base_id
+            collaborator.active = active
+            if not active:
+                collaborator.active_session_id = None
+                collaborator.active_session_started_at = None
+                collaborator.active_session_ip = None
+                collaborator.active_session_user_agent = None
+            audit_event("collaborator_update", user=user, company_id=collaborator.company_id, resource_type="user", resource_id=collaborator.id, details=collaborator.email)
+            db.session.commit()
+            return redirect(url_for("web_bp.collaborators_page", company_id=collaborator.company_id or selected_company_id, status="ok"))
+        except Exception as exc:
+            db.session.rollback()
+            message = f"<div class='client-notice danger'>Nao foi possivel salvar. {escape(str(exc))}</div>"
+
+    companies = Company.query.order_by(Company.name).all() if user.is_master else [user.company]
+    company_field = f"<input type='hidden' name='company_id' value='{collaborator.company_id or selected_company_id or ''}'>"
+    if user.is_master:
+        company_options = "".join(
+            f"<option value='{company.id}' {'selected' if company.id == (collaborator.company_id or selected_company_id) else ''}>{escape(company.name)}</option>"
+            for company in companies if company
+        )
+        company_field = f"<label>Empresa<select name='company_id'>{company_options}</select></label>"
+    selected_form_company_id = collaborator.company_id or selected_company_id
+    base_field = f"<label>Base / unidade<select name='base_id'>{company_base_options(selected_form_company_id, collaborator.base_id, include_all=True)}</select></label>" if selected_form_company_id else ""
+    if not user.is_master and getattr(user, "base_id", None) and role_level(user) < 3:
+        base_field = f"<input type='hidden' name='base_id' value='{user.base_id}'><p class='muted'>Base: <strong>{escape(user.base.name if user.base else '-')}</strong></p>"
+
+    body = f"""
+    <style>
+        .collab-form {{ display:grid; gap:10px; max-width:620px; }}
+        .collab-form input,.collab-form select {{ width:100%; border:1px solid #cfd8e3; border-radius:7px; padding:10px; font:inherit; }}
+        .collab-form label {{ font-weight:800; color:#0b1f3a; font-size:13px; }}
+        .client-notice.danger {{ background:#fef3f2; color:#b42318; border:1px solid #fda29b; }}
+    </style>
+    <div class='card'>
+        <h2>Editar colaborador</h2>
+        <p class='muted'>Altere gerente, operacional ou motorista. A senha so muda se uma nova senha for informada.</p>
+        {message}
+        <form method='post' class='collab-form'>
+            {company_field}
+            {base_field}
+            <label>Nome<input name='name' value='{escape(collaborator.name)}' required></label>
+            <label>Email ou login<input name='email' value='{escape(collaborator.email)}' required></label>
+            <label>Nova senha opcional<input name='password' type='password' placeholder='Preencha somente se quiser trocar'></label>
+            <label>Perfil<select name='role'>{collaborator_role_options(user, collaborator.role)}</select></label>
+            <label style='display:flex; gap:8px; align-items:center;'><input type='checkbox' name='active' {'checked' if collaborator.active else ''} style='width:auto;'> Usuario ativo</label>
+            <div style='display:flex; gap:10px; flex-wrap:wrap;'>
+                <button class='btn' type='submit'>Salvar alteracoes</button>
+                <a class='btn btn-light' href='/web/colaboradores?company_id={selected_company_id or collaborator.company_id or ""}'>Voltar</a>
+            </div>
+        </form>
+    </div>
+    """
+    return layout("Editar colaborador", body, "colaboradores")
 
 
 @web_bp.route("/web/colaboradores/status", methods=["POST"])
