@@ -1886,6 +1886,13 @@ def collaborators_page():
         message = "<div class='client-notice ok'>Colaborador cadastrado com sucesso.</div>"
     if request.args.get("status") == "ok":
         message = "<div class='client-notice ok'>Status do colaborador atualizado.</div>"
+    if user.is_master and not companies:
+        message = """
+        <div class='client-notice danger'>
+            Nenhuma empresa cliente cadastrada neste ambiente. Cadastre a empresa primeiro para liberar bases e colaboradores.
+            <div style='margin-top:8px;'><a class='btn' href='/web/empresas'>Cadastrar empresa cliente</a></div>
+        </div>
+        """
 
     company_select = ""
     if user.is_master:
@@ -1893,6 +1900,8 @@ def collaborators_page():
             f"<option value='{company.id}' {'selected' if company.id == selected_company_id else ''}>{escape(company.name)}</option>"
             for company in companies if company
         )
+        if not company_options:
+            company_options = "<option value=''>Nenhuma empresa cadastrada</option>"
         company_select = f"""
         <form method='get' class='collab-filter'>
             <label>Empresa<select name='company_id'>{company_options}</select></label>
@@ -1950,6 +1959,8 @@ def collaborators_page():
             f"<option value='{company.id}' {'selected' if company.id == selected_company_id else ''}>{escape(company.name)}</option>"
             for company in companies if company
         )
+        if not form_company_options:
+            form_company_options = "<option value=''>Cadastre uma empresa antes</option>"
         company_field = f"<label>Empresa<select name='company_id' required>{form_company_options}</select></label>"
     base_field = f"<label>Base / unidade<select name='base_id'>{company_base_options(selected_company_id, getattr(user, 'base_id', None), include_all=True)}</select></label>" if selected_company_id else ""
     if not user.is_master and getattr(user, "base_id", None) and role_level(user) < 3:
