@@ -95,3 +95,41 @@ class AuditLog(db.Model):
             "details": self.details,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class PlatformEvent(db.Model):
+    __tablename__ = "platform_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    severity = db.Column(db.String(30), default="info", nullable=False)
+    category = db.Column(db.String(80), nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    message = db.Column(db.Text, nullable=True)
+    path = db.Column(db.String(500), nullable=True)
+    method = db.Column(db.String(12), nullable=True)
+    status_code = db.Column(db.Integer, nullable=True)
+    company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    ip_address = db.Column(db.String(64), nullable=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    resolved = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    company = db.relationship("Company")
+    user = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "severity": self.severity,
+            "category": self.category,
+            "title": self.title,
+            "message": self.message,
+            "path": self.path,
+            "method": self.method,
+            "status_code": self.status_code,
+            "company_id": self.company_id,
+            "user_id": self.user_id,
+            "resolved": self.resolved,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

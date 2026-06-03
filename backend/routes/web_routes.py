@@ -27,7 +27,7 @@ from models.client import Client
 from models.company import Company, CompanyBase
 from models.operation import ManualLocation, Merchandise, MerchandiseScan, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteTransfer, StopObservation, StopProof, TelemetryEvent
 from models.route import LogisticRoute, RouteStop
-from models.saas import AuditLog, CompanySubscription, SubscriptionPlan
+from models.saas import AuditLog, CompanySubscription, PlatformEvent, SubscriptionPlan
 from models.user import User
 from models.vehicle import Vehicle
 
@@ -517,11 +517,12 @@ def layout(title, body, active="dashboard"):
         master_items = f"""
             <a class="{active_class('contatos')}" href="/web/contatos">Contato publico geral</a>
             <a class="{active_class('insights_publicos')}" href="/web/insights-publicos">Insights publicos</a>
+            <a class="{active_class('saude_ia')}" href="/web/saude-ia">Saude e IA</a>
             <a class="{active_class('saas')}" href="/web/saas-producao">SaaS / Producao</a>
             <a class="{active_class('empresas')}" href="/web/empresas">Empresas</a>
             <a class="{active_class('senhas')}" href="/web/redefinir-senha">Redefinir senhas</a>
         """
-        master_links = nav_section("Master", master_items, active in ("contatos", "insights_publicos", "saas", "empresas", "senhas"))
+        master_links = nav_section("Master", master_items, active in ("contatos", "insights_publicos", "saude_ia", "saas", "empresas", "senhas"))
     account_links = nav_section("Conta", '<a href="/logout">Sair</a>', False)
 
     return f"""
@@ -1683,6 +1684,207 @@ def saas_production_page():
     </section>
     """
     return layout("SaaS / Producao", body, "saas")
+
+
+@web_bp.route("/web/saude-ia")
+@web_login_required
+def platform_health_ai_page():
+    user = request.web_user
+    if not can_see_master(user):
+        return layout("Acesso negado", "<div class='card'><h2>Area exclusiva master.</h2></div>", "saude_ia"), 403
+
+    now = datetime.now()
+    last_24h = now - timedelta(hours=24)
+    last_7d = now - timedelta(days=7)
+
+    database_ok = True
+    database_message = "Banco respondendo"
+    try:
+        db.session.execute(db.text("SELECT 1"))
+    except Exception as exc:
+        database_ok = False
+        database_message = str(exc)[:160]
+
+    recent_events = PlatformEvent.query.order_by(PlatformEvent.created_at.desc()).limit(12).all()
+    critical_24h = PlatformEvent.query.filter(PlatformEvent.created_at >= last_24h, PlatformEvent.severity == "critical").count()
+    warning_24h = PlatformEvent.query.filter(PlatformEvent.created_at >= last_24h, PlatformEvent.severity.in_(("warning", "attention"))).count()
+    unresolved_count = PlatformEvent.query.filter_by(resolved=False).count()
+    audit_24h = AuditLog.query.filter(AuditLog.created_at >= last_24h).count()
+
+    today = now.date().isoformat()
+    future_limit = (now.date() + timedelta(days=2)).isoformat()
+    monitored_routes = LogisticRoute.query.filter(
+        LogisticRoute.planned_date.isnot(None),
+        LogisticRoute.planned_date >= today,
+        LogisticRoute.planned_date <= future_limit,
+    ).order_by(LogisticRoute.planned_date, LogisticRoute.name).all()
+
+    telemetry_route_ids = {
+        item.route_id for item in TelemetryEvent.query.filter(TelemetryEvent.created_at >= last_24h, TelemetryEvent.route_id.isnot(None)).all()
+    }
+    proof_route_ids = {
+        item.route_id for item in StopProof.query.filter(StopProof.created_at >= last_7d).all()
+    }
+    divergence_count = MerchandiseScan.query.filter(
+        MerchandiseScan.created_at >= last_7d,
+        MerchandiseScan.result_status.in_(("fora_rota", "duplicado", "divergente", "erro")),
+    ).count()
+
+    route_alerts = []
+    for route in monitored_routes:
+        stop_count = len(route.stops)
+        duration = int(route.estimated_duration_minutes or route_work_minutes_without_break(route) or 0)
+        pending_count = sum(1 for stop in route.stops if (stop.status or "pendente") != "realizado")
+        route_name = route_display_name(route)
+        if duration > WORKDAY_LIMIT_MINUTES:
+            route_alerts.append(("critico", route, f"{route_name}: previsao acima de 10h ({tempo_formatado(duration)}). Dividir rota ou criar continuidade com interjornada."))
+        elif duration > INTRADAY_BREAK_REQUIRED_AFTER and not RouteBreak.query.filter_by(route_id=route.id, active=True).first():
+            route_alerts.append(("atencao", route, f"{route_name}: acima de 6h sem intervalo registrado. Inserir intrajornada entre 4h e 6h."))
+        if route.planned_date == today and route.id not in telemetry_route_ids:
+            route_alerts.append(("critico", route, f"{route_name}: rota do dia sem telemetria recebida."))
+        if stop_count and pending_count == stop_count and route.planned_date == today:
+            route_alerts.append(("atencao", route, f"{route_name}: todos os pontos ainda pendentes hoje."))
+        if route.id not in proof_route_ids and route.planned_date and route.planned_date < today:
+            route_alerts.append(("info", route, f"{route_name}: sem comprovantes recentes vinculados."))
+
+    client_profiles = []
+    clients = Client.query.filter_by(active=True).all()
+    for client in clients:
+        stops = list(client.stops or [])
+        if not stops:
+            continue
+        service_values = [stop_service_minutes(stop) for stop in stops]
+        avg_service = sum(service_values) / len(service_values)
+        route_ids = {stop.route_id for stop in stops}
+        realized = sum(1 for stop in stops if (stop.status or "") == "realizado")
+        client_profiles.append({
+            "client": client,
+            "avg_service": avg_service,
+            "samples": len(stops),
+            "routes": len(route_ids),
+            "realized": realized,
+        })
+    client_profiles.sort(key=lambda item: (item["avg_service"], item["samples"]), reverse=True)
+
+    adaptive_recommendations = []
+    for item in client_profiles[:8]:
+        if item["avg_service"] > DEFAULT_SERVICE_MINUTES + 5:
+            adaptive_recommendations.append(
+                f"{item['client'].name}: atendimento medio {int(round(item['avg_service']))} min em {item['samples']} parada(s). Sugestao: usar esse tempo como padrao nas proximas simulacoes."
+            )
+    long_routes = [route for route in monitored_routes if int(route.estimated_duration_minutes or 0) > WORKDAY_LIMIT_MINUTES]
+    if long_routes:
+        adaptive_recommendations.append(f"{len(long_routes)} rota(s) futuras acima de 10h. Sugestao: dividir por base/regiao ou programar continuidade com descanso de 11h.")
+    if divergence_count:
+        adaptive_recommendations.append(f"{divergence_count} divergencia(s) de mercadoria nos ultimos 7 dias. Sugestao: revisar carregamento por rota antes da saida.")
+    if warning_24h:
+        adaptive_recommendations.append(f"{warning_24h} alerta(s) tecnico(s) nas ultimas 24h. Sugestao: acompanhar estabilidade antes de demonstracao para cliente.")
+    if not adaptive_recommendations:
+        adaptive_recommendations.append("Sem aprendizado critico no momento. Conforme o uso crescer, a IA melhora previsao de atendimento, risco e produtividade por cliente.")
+
+    event_rows = "".join(
+        f"""
+        <tr>
+            <td><span class='risk {escape(event.severity)}'>{escape(event.severity.upper())}</span></td>
+            <td>{escape(event.category)}</td>
+            <td><strong>{escape(event.title)}</strong><br><small>{escape((event.message or '-')[:180])}</small></td>
+            <td>{escape(event.path or '-')}</td>
+            <td>{display_date(event.created_at.strftime('%Y-%m-%d') if event.created_at else '')}</td>
+        </tr>
+        """
+        for event in recent_events
+    )
+    if not event_rows:
+        event_rows = "<tr><td colspan='5'>Nenhum erro tecnico registrado ainda.</td></tr>"
+
+    route_rows = "".join(
+        f"""
+        <tr>
+            <td><span class='risk {severity}'>{severity.upper()}</span></td>
+            <td>{escape(route.planned_date or '-')}</td>
+            <td><a href='/web/operacao?data={escape(route.planned_date or "")}&route_id={route.id}'>{escape(route_display_name(route))}</a><br><small>{escape(route_free_label(route))}</small></td>
+            <td>{escape(message)}</td>
+        </tr>
+        """
+        for severity, route, message in route_alerts[:16]
+    )
+    if not route_rows:
+        route_rows = "<tr><td colspan='4'>Sem alertas operacionais criticos para hoje e proximos dias.</td></tr>"
+
+    profile_rows = "".join(
+        f"""
+        <tr>
+            <td>{escape(item['client'].name)}<br><small>{escape(item['client'].company.name if item['client'].company else '-')}</small></td>
+            <td>{int(round(item['avg_service']))} min</td>
+            <td>{item['samples']}</td>
+            <td>{item['routes']}</td>
+            <td>{item['realized']}</td>
+        </tr>
+        """
+        for item in client_profiles[:10]
+    )
+    if not profile_rows:
+        profile_rows = "<tr><td colspan='5'>Ainda nao ha historico suficiente de paradas para aprendizado por cliente.</td></tr>"
+
+    recommendation_items = "".join(f"<li>{escape(item)}</li>" for item in adaptive_recommendations)
+    db_status = "ok" if database_ok else "critical"
+
+    body = f"""
+    <style>
+        .health-grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:16px; }}
+        .health-card {{ background:#fff; border:1px solid #d7e0ec; border-radius:8px; padding:14px; }}
+        .health-card span {{ display:block; color:#667085; font-size:12px; font-weight:900; text-transform:uppercase; }}
+        .health-card strong {{ display:block; margin-top:7px; font-size:26px; }}
+        .health-card small {{ display:block; margin-top:5px; color:#667085; }}
+        .risk {{ display:inline-block; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:900; }}
+        .risk.critical,.risk.critico {{ background:#fef3f2; color:#b42318; }}
+        .risk.warning,.risk.attention,.risk.atencao {{ background:#fffaeb; color:#b54708; }}
+        .risk.info,.risk.ok {{ background:#eef4ff; color:#1849a9; }}
+        .ai-panel {{ background:#0b1f3a; color:white; border-radius:8px; padding:18px; }}
+        .ai-panel h2 {{ color:white; margin-top:0; }}
+        .ai-panel li {{ margin:8px 0; color:#e4e7ec; }}
+        .two-wide {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }}
+        @media(max-width:1000px) {{ .health-grid,.two-wide {{ grid-template-columns:1fr; }} }}
+    </style>
+    <div class='health-grid'>
+        <div class='health-card'><span>Banco</span><strong><span class='risk {db_status}'>{'OK' if database_ok else 'ERRO'}</span></strong><small>{escape(database_message)}</small></div>
+        <div class='health-card'><span>Erros criticos 24h</span><strong>{critical_24h}</strong><small>{unresolved_count} evento(s) aberto(s)</small></div>
+        <div class='health-card'><span>Alertas operacionais</span><strong>{len(route_alerts)}</strong><small>Hoje e proximos 2 dias</small></div>
+        <div class='health-card'><span>Auditoria 24h</span><strong>{audit_24h}</strong><small>Eventos de uso registrados</small></div>
+    </div>
+    <div class='two-wide'>
+        <div class='ai-panel'>
+            <h2>IA adaptativa operacional</h2>
+            <p>Primeira camada de aprendizado: o sistema compara historico, telemetria, comprovantes, tempo de atendimento e risco de jornada para sugerir ajustes.</p>
+            <ul>{recommendation_items}</ul>
+        </div>
+        <div class='card'>
+            <h2>Como a IA vai aprender</h2>
+            <p class='muted'>A cada rota executada, o sistema passa a refinar tempo por cliente, motorista, base, veiculo, janela, distancia, comprovantes e divergencias.</p>
+            <ol>
+                <li>Coleta dados reais de atendimento e execucao.</li>
+                <li>Compara previsto versus realizado.</li>
+                <li>Sugere tempo padrao e risco antes da rota oficial.</li>
+                <li>Melhora simulacao e torre de controle com historico.</li>
+            </ol>
+        </div>
+    </div>
+    <div class='card' style='margin-top:16px;'>
+        <h2>Rotas e operacao em risco</h2>
+        <div class='table-wrap'><table class='table'><thead><tr><th>Risco</th><th>Data</th><th>Rota</th><th>Alerta</th></tr></thead><tbody>{route_rows}</tbody></table></div>
+    </div>
+    <div class='two-wide'>
+        <div class='card'>
+            <h2>Aprendizado por cliente</h2>
+            <div class='table-wrap'><table class='table'><thead><tr><th>Cliente</th><th>Tempo medio</th><th>Amostras</th><th>Rotas</th><th>Realizados</th></tr></thead><tbody>{profile_rows}</tbody></table></div>
+        </div>
+        <div class='card'>
+            <h2>Eventos tecnicos recentes</h2>
+            <div class='table-wrap'><table class='table'><thead><tr><th>Nivel</th><th>Categoria</th><th>Evento</th><th>Pagina</th><th>Data</th></tr></thead><tbody>{event_rows}</tbody></table></div>
+        </div>
+    </div>
+    """
+    return layout("Saude e IA", body, "saude_ia")
 
 
 @web_bp.route("/web/bases", methods=["GET", "POST"])

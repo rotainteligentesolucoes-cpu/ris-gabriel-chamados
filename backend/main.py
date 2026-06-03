@@ -4,11 +4,11 @@ from datetime import timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
-from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.security import generate_password_hash
 
 from database.database import db
-from models import AuditLog, Client, Company, CompanyBase, CompanySubscription, LogisticRoute, ManualLocation, Merchandise, MerchandiseScan, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteStop, RouteTransfer, StopObservation, StopProof, SubscriptionPlan, TelemetryEvent, User, Vehicle
+from models import AuditLog, Client, Company, CompanyBase, CompanySubscription, LogisticRoute, ManualLocation, Merchandise, MerchandiseScan, PlatformEvent, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteStop, RouteTransfer, StopObservation, StopProof, SubscriptionPlan, TelemetryEvent, User, Vehicle
 from routes.client_routes import client_bp
 from routes.company_routes import company_bp
 from routes.route_routes import route_bp
@@ -90,6 +90,45 @@ def add_security_headers(response):
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(_error):
     return jsonify({"error": "Arquivo maior que o limite permitido."}), 413
+
+
+@app.errorhandler(Exception)
+def handle_application_error(error):
+    if isinstance(error, HTTPException):
+        return error
+    try:
+        user_id = None
+        company_id = None
+        user = None
+        if "user_id" in request.cookies:
+            user = None
+        try:
+            from flask import session
+            user_id = session.get("user_id")
+            if user_id:
+                user = User.query.get(user_id)
+                company_id = user.company_id if user else None
+        except Exception:
+            user = None
+        db.session.add(PlatformEvent(
+            severity="critical",
+            category="system_error",
+            title=error.__class__.__name__,
+            message=str(error)[:4000],
+            path=request.path,
+            method=request.method,
+            status_code=500,
+            company_id=company_id,
+            user_id=user.id if user else user_id,
+            ip_address=request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", request.remote_addr),
+            user_agent=(request.headers.get("User-Agent") or "")[:255],
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    if request.path.startswith("/api"):
+        return jsonify({"error": "Erro interno do sistema."}), 500
+    return "<h1>Erro interno do sistema</h1><p>O evento foi registrado para suporte master.</p>", 500
 
 
 @app.route("/healthz")

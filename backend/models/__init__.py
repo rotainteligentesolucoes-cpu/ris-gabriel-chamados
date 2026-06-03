@@ -2,7 +2,7 @@
 from models.company import Company, CompanyBase
 from models.operation import ManualLocation, Merchandise, MerchandiseScan, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteTransfer, StopObservation, StopProof, TelemetryEvent
 from models.route import LogisticRoute, RouteStop
-from models.saas import AuditLog, CompanySubscription, SubscriptionPlan
+from models.saas import AuditLog, CompanySubscription, PlatformEvent, SubscriptionPlan
 from models.user import User
 from models.vehicle import Vehicle
 
@@ -18,6 +18,7 @@ __all__ = [
     "MerchandiseScan",
     "PublicContactRequest",
     "PublicInsight",
+    "PlatformEvent",
     "ReportSnapshot",
     "RouteBreak",
     "RouteStop",
