@@ -180,6 +180,7 @@ def ensure_sqlite_schema():
     migrations = {
         "users": {
             "base_id": "ALTER TABLE users ADD COLUMN base_id INTEGER",
+            "can_view_finance": "ALTER TABLE users ADD COLUMN can_view_finance BOOLEAN DEFAULT 0",
             "active_session_id": "ALTER TABLE users ADD COLUMN active_session_id VARCHAR(64)",
             "active_session_started_at": "ALTER TABLE users ADD COLUMN active_session_started_at DATETIME",
             "active_session_ip": "ALTER TABLE users ADD COLUMN active_session_ip VARCHAR(64)",
@@ -253,6 +254,32 @@ def ensure_sqlite_schema():
             if column_name not in existing:
                 db.session.execute(db.text(sql))
     db.session.commit()
+
+
+def ensure_postgres_schema():
+    if not str(db.engine.url).startswith("postgresql"):
+        return
+
+    migrations = {
+        "users": {
+            "can_view_finance": "ALTER TABLE users ADD COLUMN can_view_finance BOOLEAN DEFAULT FALSE",
+        },
+    }
+
+    for table_name, table_migrations in migrations.items():
+        existing = db.session.execute(db.text("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = :table_name
+        """), {"table_name": table_name}).fetchall()
+        existing_columns = {row[0] for row in existing}
+        if not existing_columns:
+            continue
+        for column_name, sql in table_migrations.items():
+            if column_name not in existing_columns:
+                db.session.execute(db.text(sql))
+    db.session.commit()
+
 
 def seed_demo_data():
     default_plans = [
@@ -523,6 +550,7 @@ def seed_public_insights():
 with app.app_context():
     db.create_all()
     ensure_sqlite_schema()
+    ensure_postgres_schema()
     seed_master_user()
     seed_public_insights()
     if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":

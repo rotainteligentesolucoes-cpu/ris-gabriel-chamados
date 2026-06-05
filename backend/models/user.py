@@ -11,6 +11,7 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(50), default="operator", nullable=False)
+    can_view_finance = db.Column(db.Boolean, default=False)
     active = db.Column(db.Boolean, default=True)
     active_session_id = db.Column(db.String(64), nullable=True)
     active_session_started_at = db.Column(db.DateTime, nullable=True)
@@ -38,6 +39,7 @@ class User(db.Model):
             "name": self.name,
             "email": self.email,
             "role": self.role,
+            "can_view_finance": self.can_view_finance,
             "active": self.active,
             "active_session_started_at": self.active_session_started_at.isoformat() if self.active_session_started_at else None,
             "terms_accepted_at": self.terms_accepted_at.isoformat() if self.terms_accepted_at else None,

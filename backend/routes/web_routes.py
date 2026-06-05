@@ -78,7 +78,28 @@ def can_see_admin(user):
 
 
 def can_see_finance(user):
-    return role_level(user) >= 3
+    if not user:
+        return False
+    if role_level(user) >= 3:
+        return True
+    return bool(getattr(user, "can_view_finance", False) and can_see_admin(user) and not is_driver(user))
+
+
+def can_grant_finance_access(user):
+    return bool(user and (user.is_master or role_level(user) >= 3))
+
+
+def role_can_receive_finance(role):
+    level = ROLE_LEVELS.get((role or "").lower(), 1)
+    return 2 <= level < 3
+
+
+def finance_access_label(user):
+    if role_level(user) >= 3:
+        return "<span class='badge badge-success'>Padrao do perfil</span>"
+    if getattr(user, "can_view_finance", False):
+        return "<span class='badge badge-warning'>Liberado pelo CEO</span>"
+    return "<span class='muted'>Sem valores</span>"
 
 
 def can_see_master(user):
@@ -118,7 +139,7 @@ def role_label(role):
 
 def collaborator_role_options(user, selected="operator"):
     roles = [("operator", "Operacional"), ("driver", "Motorista")]
-    if user.is_master or can_see_finance(user):
+    if can_grant_finance_access(user):
         roles.append(("manager", "Gerente"))
         roles.append(("ceo", "CEO / Proprietario"))
     if user.is_master:
@@ -133,7 +154,7 @@ def can_assign_role(user, role):
     role = (role or "").lower()
     if user.is_master:
         return role in ROLE_LEVELS
-    if can_see_finance(user):
+    if role_level(user) >= 3:
         return role in ("operator", "operador", "driver", "motorista", "manager", "gerente", "admin_empresa", "ceo", "proprietario", "owner")
     if can_see_admin(user):
         return role in ("operator", "operador", "driver", "motorista")
@@ -2050,6 +2071,7 @@ def collaborators_page():
         password = request.form.get("password", "")
         role = request.form.get("role", "operator").strip().lower()
         base_id = request.form.get("base_id", type=int)
+        can_view_finance = can_grant_finance_access(user) and role_can_receive_finance(role) and request.form.get("can_view_finance") == "on"
         try:
             if not selected_company_id and role != "master":
                 raise ValueError("Selecione a empresa.")
@@ -2075,6 +2097,7 @@ def collaborators_page():
                 email=email,
                 password=generate_password_hash(password),
                 role=role,
+                can_view_finance=can_view_finance,
                 active=True,
             )
             db.session.add(collaborator)
@@ -2146,13 +2169,14 @@ def collaborators_page():
             <td>{escape(item.company.name if item.company else "Plataforma")}</td>
             <td>{escape(item.base.name if item.base else "Todas as bases")}</td>
             <td>{escape(role_label(item.role))}</td>
+            <td>{finance_access_label(item)}</td>
             <td>{status_badge}</td>
             <td>{display_date(item.created_at.strftime("%Y-%m-%d") if item.created_at else "")}</td>
             <td>{action}</td>
         </tr>
         """
     if not rows:
-        rows = "<tr><td colspan='7'>Nenhum colaborador cadastrado para esta empresa.</td></tr>"
+        rows = "<tr><td colspan='8'>Nenhum colaborador cadastrado para esta empresa.</td></tr>"
 
     company_hidden = f"<input type='hidden' name='company_id' value='{selected_company_id or ''}'>"
     company_field = company_hidden
@@ -2167,6 +2191,12 @@ def collaborators_page():
     base_field = f"<label>Base / unidade<select name='base_id'>{company_base_options(selected_company_id, getattr(user, 'base_id', None), include_all=True)}</select></label>" if selected_company_id else ""
     if not user.is_master and getattr(user, "base_id", None) and role_level(user) < 3:
         base_field = f"<input type='hidden' name='base_id' value='{user.base_id}'><p class='muted'>Base: <strong>{escape(user.base.name if user.base else '-')}</strong></p>"
+    finance_access_field = ""
+    if can_grant_finance_access(user):
+        finance_access_field = """
+                <label class='check-line'><input type='checkbox' name='can_view_finance'> Autorizar acesso a valores para gerente</label>
+                <p class='muted'>Use somente quando o CEO/proprietario liberar um gerente para ver custos, margens e valores.</p>
+        """
 
     body = f"""
     <style>
@@ -2174,6 +2204,8 @@ def collaborators_page():
         .collab-form {{ display:grid; gap:10px; }}
         .collab-form input,.collab-form select,.collab-filter select {{ width:100%; border:1px solid #cfd8e3; border-radius:7px; padding:10px; font:inherit; }}
         .collab-form label,.collab-filter label {{ font-weight:800; color:#0b1f3a; font-size:13px; }}
+        .collab-form .check-line {{ display:flex; gap:8px; align-items:center; font-weight:800; }}
+        .collab-form .check-line input {{ width:auto; }}
         .collab-filter {{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin-bottom:12px; }}
         .action-stack {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; }}
         .action-stack form {{ margin:0; }}
@@ -2196,13 +2228,14 @@ def collaborators_page():
                 <label>Email ou login<input name='email' required placeholder='ex: operador01 ou email@empresa.com'></label>
                 <label>Senha temporaria<input name='password' type='password' required placeholder='Minimo 6 caracteres'></label>
                 <label>Perfil<select name='role'>{collaborator_role_options(user)}</select></label>
+                {finance_access_field}
                 <button class='btn' type='submit'>Cadastrar colaborador</button>
             </form>
         </div>
         <div class='card'>
             <h2>Usuarios cadastrados</h2>
             <div class='table-wrap'><table class='table'>
-                <thead><tr><th>Usuario</th><th>Empresa</th><th>Base</th><th>Perfil</th><th>Status</th><th>Criado em</th><th>Acao</th></tr></thead>
+                <thead><tr><th>Usuario</th><th>Empresa</th><th>Base</th><th>Perfil</th><th>Valores</th><th>Status</th><th>Criado em</th><th>Acao</th></tr></thead>
                 <tbody>{rows}</tbody>
             </table></div>
         </div>
@@ -2237,6 +2270,7 @@ def collaborator_edit_page(collaborator_id):
             base_id = request.form.get("base_id", type=int)
             password = request.form.get("password", "")
             active = request.form.get("active") == "on"
+            can_view_finance = can_grant_finance_access(user) and role_can_receive_finance(role) and request.form.get("can_view_finance") == "on"
 
             if not name or not email:
                 raise ValueError("Informe nome e login.")
@@ -2268,6 +2302,7 @@ def collaborator_edit_page(collaborator_id):
             collaborator.name = name
             collaborator.email = email
             collaborator.role = role
+            collaborator.can_view_finance = can_view_finance
             collaborator.company_id = None if role == "master" else selected_company_id
             collaborator.base_id = None if role == "master" else base_id
             collaborator.active = active
@@ -2295,12 +2330,20 @@ def collaborator_edit_page(collaborator_id):
     base_field = f"<label>Base / unidade<select name='base_id'>{company_base_options(selected_form_company_id, collaborator.base_id, include_all=True)}</select></label>" if selected_form_company_id else ""
     if not user.is_master and getattr(user, "base_id", None) and role_level(user) < 3:
         base_field = f"<input type='hidden' name='base_id' value='{user.base_id}'><p class='muted'>Base: <strong>{escape(user.base.name if user.base else '-')}</strong></p>"
+    finance_access_field = ""
+    if can_grant_finance_access(user):
+        finance_access_field = f"""
+            <label class='check-line'><input type='checkbox' name='can_view_finance' {'checked' if getattr(collaborator, 'can_view_finance', False) else ''}> Autorizar acesso a valores para gerente</label>
+            <p class='muted'>Quando marcado, gerente autorizado acessa Valores e relatorios financeiros da empresa/base permitida.</p>
+        """
 
     body = f"""
     <style>
         .collab-form {{ display:grid; gap:10px; max-width:620px; }}
         .collab-form input,.collab-form select {{ width:100%; border:1px solid #cfd8e3; border-radius:7px; padding:10px; font:inherit; }}
         .collab-form label {{ font-weight:800; color:#0b1f3a; font-size:13px; }}
+        .collab-form .check-line {{ display:flex; gap:8px; align-items:center; }}
+        .collab-form .check-line input {{ width:auto; }}
         .client-notice.danger {{ background:#fef3f2; color:#b42318; border:1px solid #fda29b; }}
     </style>
     <div class='card'>
@@ -2314,6 +2357,7 @@ def collaborator_edit_page(collaborator_id):
             <label>Email ou login<input name='email' value='{escape(collaborator.email)}' required></label>
             <label>Nova senha opcional<input name='password' type='password' placeholder='Preencha somente se quiser trocar'></label>
             <label>Perfil<select name='role'>{collaborator_role_options(user, collaborator.role)}</select></label>
+            {finance_access_field}
             <label style='display:flex; gap:8px; align-items:center;'><input type='checkbox' name='active' {'checked' if collaborator.active else ''} style='width:auto;'> Usuario ativo</label>
             <div style='display:flex; gap:10px; flex-wrap:wrap;'>
                 <button class='btn' type='submit'>Salvar alteracoes</button>
