@@ -655,60 +655,76 @@ def layout(title, body, active="dashboard"):
     """
 
 
-INSIGHT_ORDER = ["resultado", "estrategia", "dados", "logistica", "economia", "pessoas"]
+INSIGHT_ORDER = ["planejamento", "pessoas", "otimizacao", "seguranca", "desempenho", "logistica", "dados", "gestao"]
 
 
 def public_insights_payload():
     rows = PublicInsight.query.all()
     data = {row.insight_key: row.to_public_dict() for row in rows}
     fallback = {
-        "resultado": {
-            "title": "Resultado",
-            "intro": "A logistica moderna mede resultado em tempo real, nao apenas no fechamento do dia.",
-            "items": ["SLA por cliente, rota e motorista com acompanhamento ao vivo."],
-            "source_title": "RIS",
-            "source_url": "",
-            "source_date": "Atualizar mensalmente",
-        },
-        "estrategia": {
-            "title": "Estrategia",
-            "intro": "Empresas de ponta usam simulacao e IA para decidir antes de executar.",
-            "items": ["Simular rotas por custo, prazo, prioridade, cubagem e capacidade do veiculo."],
-            "source_title": "RIS",
-            "source_url": "",
-            "source_date": "Atualizar mensalmente",
-        },
-        "dados": {
-            "title": "Dados",
-            "intro": "Dados viraram o painel de controle da logistica.",
-            "items": ["Telemetria, cubagem, peso e historico ajudam a reduzir risco operacional."],
-            "source_title": "RIS",
-            "source_url": "",
-            "source_date": "Atualizar mensalmente",
-        },
-        "logistica": {
-            "title": "Logistica",
-            "intro": "A logistica moderna conecta transporte, estoque, atendimento e comprovacao.",
-            "items": ["Ultima milha exige visibilidade por parada e janela de atendimento."],
-            "source_title": "RIS",
-            "source_url": "",
-            "source_date": "Atualizar mensalmente",
-        },
-        "economia": {
-            "title": "Economia",
-            "intro": "Economia logistica vem de ocupar melhor o veiculo e prever risco.",
-            "items": ["Peso cubado evita cobrar frete errado quando a carga ocupa muito espaco."],
-            "source_title": "RIS",
-            "source_url": "",
-            "source_date": "Atualizar mensalmente",
+        "planejamento": {
+            "title": "Planejamento",
+            "intro": "Planejar deixou de ser apenas montar uma sequencia: agora envolve capacidade, jornada, custo, risco e janela de atendimento antes da execucao.",
+            "items": ["Use simulacao para decidir quantidade de rotas, tipo de veiculo, tempo de atendimento e viabilidade operacional antes de oficializar o dia."],
+            "source_title": "Gartner Supply Chain Technology Trends 2025",
+            "source_url": "https://www.gartner.com/en/newsroom/press-releases/2025-03-18-gartner-identifies-top-supply-chain-technology-trends-for-2025",
+            "source_date": "Base 2025 | revisar mensalmente",
         },
         "pessoas": {
             "title": "Pessoas",
-            "intro": "Logistica bem organizada melhora resultado e qualidade de vida no trabalho.",
-            "items": ["Menos improviso, menos retrabalho e mais previsibilidade para empresario, gestor e colaborador."],
-            "source_title": "RIS",
-            "source_url": "",
-            "source_date": "Atualizar mensalmente",
+            "intro": "A melhor rota tambem protege quem executa: previsibilidade, pausas corretas e menos retrabalho aumentam seguranca, qualidade e engajamento.",
+            "items": ["Motorista, operacional, gerencia e CEO trabalham com a mesma verdade operacional, cada um dentro da sua permissao."],
+            "source_title": "WEF Thriving Workplaces 2025",
+            "source_url": "https://www.weforum.org/publications/thriving-workplaces-how-employers-can-improve-productivity-and-change-lives/",
+            "source_date": "Base 2025 | revisar mensalmente",
+        },
+        "otimizacao": {
+            "title": "Otimizacao de Rotas",
+            "intro": "A otimizacao moderna combina menor custo, SLA, prioridade, cubagem, peso, janela, descanso legal e historico real de atendimento.",
+            "items": ["Rotas acima de 10 horas devem ser quebradas ou continuar em nova jornada com descanso interjornada minimo."],
+            "source_title": "DHL Logistics Trend Radar 7.0",
+            "source_url": "https://www.dhl.com/us-en/home/insights-and-innovation/insights/logistics-trend-radar.html",
+            "source_date": "Radar 7.0 | revisar mensalmente",
+        },
+        "seguranca": {
+            "title": "Seguranca e Conformidade",
+            "intro": "SaaS competitivo precisa proteger dados, acessos, comprovantes, termos aceitos, auditoria e rastreabilidade de quem fez cada acao.",
+            "items": ["Login por empresa, base, perfil e sessao reduz risco de acesso indevido e fortalece a operacao do cliente."],
+            "source_title": "RIS Seguranca 1",
+            "source_url": "/termos-de-uso",
+            "source_date": "Controle interno | revisar mensalmente",
+        },
+        "desempenho": {
+            "title": "Desempenho e Resultados",
+            "intro": "Indicadores bons nao servem so para olhar o passado: eles mostram atraso, produtividade, custo, divergencia e oportunidade de melhoria.",
+            "items": ["Exportacao para Excel/PDF e relatorios por 90 dias ajudam o cliente a provar resultado e corrigir gargalos."],
+            "source_title": "Gartner Digital Logistics Management",
+            "source_url": "https://emt.gartnerweb.com/en/articles/supply-chain-logistics-management",
+            "source_date": "Pesquisa 2025 | revisar mensalmente",
+        },
+        "logistica": {
+            "title": "Logistica Eficiente",
+            "intro": "A logistica eficiente une roteirizacao, mercadorias, comprovante fiscal, assinatura, foto, motorista no celular e torre de controle.",
+            "items": ["Conferencia por QR Code ou codigo de barras reduz mercadoria fora da rota, duplicidade e divergencia no carregamento."],
+            "source_title": "Gartner Warehouse Technology Trends 2025",
+            "source_url": "https://www.gartner.com/en/documents/6526702",
+            "source_date": "Base 2025 | revisar mensalmente",
+        },
+        "dados": {
+            "title": "Inteligencia de Dados",
+            "intro": "Dados de GPS, tempo de atendimento, bateria, chegada, saida, cubagem, peso e divergencias formam a base para IA operacional.",
+            "items": ["A ferramenta pode aprender por cliente e por rota para sugerir tempos mais realistas a cada ciclo de operacao."],
+            "source_title": "McKinsey: Gen AI reshaping supply chains",
+            "source_url": "https://www.mckinsey.com/capabilities/operations/our-insights/beyond-automation-how-gen-ai-is-reshaping-supply-chains",
+            "source_date": "Base 2025 | revisar mensalmente",
+        },
+        "gestao": {
+            "title": "Gestao e Controle",
+            "intro": "Controle bom e simples: a matriz ve tudo, cada base ve sua operacao e cada perfil enxerga somente o que precisa executar.",
+            "items": ["Master acompanha empresas, bases, colaboradores, auditoria, saude do sistema e suporte sem expor area interna aos clientes."],
+            "source_title": "RIS SaaS Multiempresa",
+            "source_url": "/web/implantacao",
+            "source_date": "Controle interno | revisar mensalmente",
         },
     }
     for key, value in fallback.items():
@@ -939,6 +955,69 @@ LOGIN_TEMPLATE = """
             .side { transform:translateY(-6px); }
             .brand { top:485px; }
         }
+        body {
+            background:#031426 url('/static/img/login-rota-mapa.png') center center / cover no-repeat fixed;
+        }
+        .wrap {
+            grid-template-columns:minmax(0, 1fr) 320px;
+            gap:34px;
+            background:linear-gradient(90deg, rgba(2,8,23,.06), rgba(2,8,23,.18) 72%, rgba(2,8,23,.34));
+        }
+        .wrap:before, .network, .map-shape, .compass, .route-line, .brand { display:none; }
+        .stage {
+            position:absolute;
+            inset:0;
+            min-height:100vh;
+            transform:none;
+            pointer-events:none;
+        }
+        .side {
+            grid-column:2;
+            align-self:center;
+            justify-self:end;
+        }
+        .panel, .contact-panel {
+            background:linear-gradient(145deg, rgba(13,39,68,.72), rgba(9,25,46,.56));
+            border-color:rgba(216,237,255,.35);
+        }
+        .word {
+            position:fixed;
+            display:block;
+            min-width:120px;
+            min-height:72px;
+            color:transparent;
+            text-shadow:none;
+            border-radius:20px;
+            pointer-events:auto;
+        }
+        .word small { display:none; }
+        .word:hover, .word:focus-visible {
+            color:transparent;
+            outline:2px solid rgba(112,255,190,.8);
+            outline-offset:4px;
+            background:rgba(34,197,94,.07);
+            filter:none;
+        }
+        .w-planning { left:15%; top:18%; width:18%; height:22%; }
+        .w-people { left:43%; top:8%; width:18%; height:16%; }
+        .w-optimization { left:69%; top:13%; width:23%; height:20%; }
+        .w-security { left:78%; top:40%; width:19%; height:18%; }
+        .w-performance { left:66%; top:67%; width:24%; height:21%; }
+        .w-logistics { left:39%; top:73%; width:23%; height:18%; }
+        .w-data { left:13%; top:66%; width:24%; height:18%; }
+        .w-management { left:2%; top:40%; width:23%; height:20%; }
+        @media (max-width:940px) {
+            body { background-position:center top; }
+            .wrap {
+                min-height:100vh;
+                grid-template-columns:1fr;
+                align-items:end;
+                padding:22px 16px 24px;
+            }
+            .stage { transform:none; min-height:100vh; }
+            .side { grid-column:1; justify-self:center; transform:none; }
+            .word { display:none; }
+        }
     </style>
     </head>
     <body>
@@ -948,12 +1027,14 @@ LOGIN_TEMPLATE = """
                 <div class="map-shape"></div>
                 <div class="compass"><div class="ring"></div><div class="rose"></div><div class="beam"></div><div class="center-dot"></div></div>
                 <div class="route-line"></div>
-                <button class="word w-result" type="button" data-insight="resultado" title="Ver insight de resultado">RESULTADO<small>W</small></button>
-                <button class="word w-strategy" type="button" data-insight="estrategia" title="Ver insight de estrategia">ESTRATEGIA<small>N</small></button>
-                <button class="word w-data" type="button" data-insight="dados" title="Ver insight de dados"><small>E</small>DADOS</button>
-                <button class="word w-logistics" type="button" data-insight="logistica" title="Ver insight de logistica"><small>S</small>LOGISTICA</button>
-                <button class="word w-economy" type="button" data-insight="economia" title="Ver insight de economia">ECONOMIA</button>
+                <button class="word w-planning" type="button" data-insight="planejamento" title="Ver insight de planejamento">PLANEJAMENTO</button>
                 <button class="word w-people" type="button" data-insight="pessoas" title="Ver insight de pessoas">PESSOAS</button>
+                <button class="word w-optimization" type="button" data-insight="otimizacao" title="Ver insight de otimizacao de rotas">OTIMIZACAO DE ROTAS</button>
+                <button class="word w-security" type="button" data-insight="seguranca" title="Ver insight de seguranca e conformidade">SEGURANCA E CONFORMIDADE</button>
+                <button class="word w-performance" type="button" data-insight="desempenho" title="Ver insight de desempenho e resultados">DESEMPENHO E RESULTADOS</button>
+                <button class="word w-logistics" type="button" data-insight="logistica" title="Ver insight de logistica eficiente">LOGISTICA EFICIENTE</button>
+                <button class="word w-data" type="button" data-insight="dados" title="Ver insight de inteligencia de dados">INTELIGENCIA DE DADOS</button>
+                <button class="word w-management" type="button" data-insight="gestao" title="Ver insight de gestao e controle">GESTAO E CONTROLE</button>
                 <div class="brand"><strong>ROTA</strong><span>INTELIGENTE SOLUCOES</span></div>
             </section>
             <div class="side{{ side_state }}" id="loginSide">
