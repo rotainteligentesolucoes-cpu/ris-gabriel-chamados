@@ -740,7 +740,7 @@ def login_page():
         contact_notice = "<div class='contact-ok'>Solicitacao enviada. Nossa equipe retornara pelo contato informado.</div>"
     if request.args.get("sessao") == "encerrada":
         error = "Sessao encerrada: este usuario entrou em outra maquina ou navegador."
-    side_state = " contact-open" if contact_notice else ""
+    side_state = " login-open contact-open" if contact_notice else (" login-open" if error else "")
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
@@ -753,6 +753,7 @@ def login_page():
             if user and user.active and check_password_hash(user.password, password):
                 if not request.form.get("accept_terms"):
                     error = "Para acessar, aceite os Termos de Uso e Licenca da plataforma."
+                    side_state = " login-open"
                     return render_template_string(LOGIN_TEMPLATE, error=error, contact_notice=contact_notice, side_state=side_state, insights_json=json.dumps(public_insights_payload(), ensure_ascii=False))
                 clear_login_failures(email)
                 user.terms_accepted_at = datetime.utcnow()
@@ -773,6 +774,8 @@ def login_page():
                 error = "Muitas tentativas. Aguarde alguns minutos antes de tentar novamente."
             else:
                 error = "Email ou senha invalidos."
+    if error and "login-open" not in side_state:
+        side_state += " login-open"
     insights_json = json.dumps(public_insights_payload(), ensure_ascii=False)
     return render_template_string(LOGIN_TEMPLATE, error=error, contact_notice=contact_notice, side_state=side_state, insights_json=insights_json)
 
@@ -1018,6 +1021,82 @@ LOGIN_TEMPLATE = """
             .side { grid-column:1; justify-self:center; transform:none; }
             .word { display:none; }
         }
+        .side {
+            position:fixed;
+            right:22px;
+            top:18px;
+            width:320px;
+            z-index:8;
+            align-self:unset;
+            justify-self:unset;
+        }
+        .login-fab {
+            width:auto;
+            min-width:132px;
+            height:38px;
+            border:1px solid rgba(216,237,255,.42);
+            border-radius:999px;
+            background:linear-gradient(135deg, rgba(14,54,92,.86), rgba(6,20,38,.74));
+            color:#f8fbff;
+            font-weight:900;
+            cursor:pointer;
+            box-shadow:0 12px 34px rgba(0,0,0,.38), inset 0 0 18px rgba(112,255,190,.08);
+            backdrop-filter:blur(10px);
+            float:right;
+        }
+        .login-fab:hover, .login-fab:focus-visible {
+            outline:2px solid rgba(112,255,190,.82);
+            outline-offset:3px;
+        }
+        .panel {
+            display:none;
+            clear:both;
+            margin-top:48px;
+        }
+        .side.login-open .panel {
+            display:block;
+            animation:loginIn .18s ease-out;
+        }
+        @keyframes loginIn {
+            from { opacity:0; transform:translateY(-8px); }
+            to { opacity:1; transform:translateY(0); }
+        }
+        .password-row:after { display:none; }
+        .password-row input { padding-right:58px; }
+        .password-toggle {
+            position:absolute;
+            right:8px;
+            top:25px;
+            width:42px;
+            height:24px;
+            border:1px solid rgba(112,255,139,.72);
+            border-radius:999px;
+            background:rgba(3,16,31,.78);
+            color:#dfffee;
+            font-size:11px;
+            font-weight:900;
+            cursor:pointer;
+        }
+        .contact-panel {
+            display:none;
+            clear:both;
+        }
+        .side.login-open.contact-open .contact-panel {
+            display:block;
+            max-height:410px;
+            opacity:1;
+            pointer-events:auto;
+            transform:translateY(0);
+            padding:13px 20px;
+        }
+        @media (max-width:940px) {
+            .side {
+                right:14px;
+                top:14px;
+                width:min(360px, calc(100vw - 28px));
+            }
+            .panel, .contact-panel { width:100%; }
+        }
     </style>
     </head>
     <body>
@@ -1038,13 +1117,15 @@ LOGIN_TEMPLATE = """
                 <div class="brand"><strong>ROTA</strong><span>INTELIGENTE SOLUCOES</span></div>
             </section>
             <div class="side{{ side_state }}" id="loginSide">
+                <button class="login-fab" type="button" id="loginToggle">Acesso / Login</button>
                 <form class="panel" method="post">
                     <div class="error">{{ error }}</div>
                     <label>E-mail ou Utilizador</label>
                     <input name="email" type="text" autocomplete="username" required>
                     <div class="password-row">
                         <label>Palavra-passe</label>
-                        <input name="password" type="password" autocomplete="current-password" required>
+                        <input id="passwordInput" name="password" type="password" autocomplete="current-password" required>
+                        <button class="password-toggle" type="button" id="passwordToggle" aria-label="Mostrar senha">Ver</button>
                     </div>
                     <a class="link" href="/esqueci-senha">Esqueceu a senha?</a>
                     <a class="first" href="/primeiro-acesso">Ativar Conta (Primeiro Acesso)</a>
@@ -1084,11 +1165,32 @@ LOGIN_TEMPLATE = """
         </div>
         <div class="lgpd">LGPD Ready | Conexao Criptografada</div>
         <script>
+            const loginToggle = document.getElementById('loginToggle');
             const toggle = document.getElementById('contactToggle');
             const side = document.getElementById('loginSide');
+            const passwordInput = document.getElementById('passwordInput');
+            const passwordToggle = document.getElementById('passwordToggle');
+            if (loginToggle && side) {
+                loginToggle.addEventListener('click', function () {
+                    side.classList.toggle('login-open');
+                    if (!side.classList.contains('login-open')) {
+                        side.classList.remove('contact-open');
+                    }
+                });
+            }
             if (toggle && side) {
                 toggle.addEventListener('click', function () {
+                    side.classList.add('login-open');
                     side.classList.toggle('contact-open');
+                });
+            }
+            if (passwordToggle && passwordInput) {
+                passwordToggle.addEventListener('click', function () {
+                    const visible = passwordInput.type === 'text';
+                    passwordInput.type = visible ? 'password' : 'text';
+                    passwordToggle.textContent = visible ? 'Ver' : 'Ocultar';
+                    passwordToggle.setAttribute('aria-label', visible ? 'Mostrar senha' : 'Ocultar senha');
+                    passwordInput.focus();
                 });
             }
             const insightContent = {{ insights_json|safe }};
