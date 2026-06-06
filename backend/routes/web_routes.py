@@ -69,6 +69,19 @@ ROLE_LEVELS = {
 }
 
 
+def is_master_user(user):
+    return bool(user and (getattr(user, "is_master", False) or (getattr(user, "role", "") or "").strip().lower() == "master"))
+
+
+def same_id(left, right):
+    if left is None or right is None:
+        return False
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return str(left) == str(right)
+
+
 def role_level(user):
     return ROLE_LEVELS.get((user.role or "operator").lower(), 1)
 
@@ -86,7 +99,7 @@ def can_see_finance(user):
 
 
 def can_grant_finance_access(user):
-    return bool(user and (user.is_master or role_level(user) >= 3))
+    return bool(user and (is_master_user(user) or role_level(user) >= 3))
 
 
 def role_can_receive_finance(role):
@@ -103,15 +116,15 @@ def finance_access_label(user):
 
 
 def can_see_master(user):
-    return user.is_master
+    return is_master_user(user)
 
 
 def can_manage_collaborators(user):
-    return bool(user and not is_driver(user) and (user.is_master or can_see_admin(user)))
+    return bool(user and not is_driver(user) and (is_master_user(user) or can_see_admin(user)))
 
 
 def can_manage_bases(user):
-    return bool(user and not is_driver(user) and (user.is_master or can_see_finance(user) or (can_see_admin(user) and not getattr(user, "base_id", None))))
+    return bool(user and not is_driver(user) and (is_master_user(user) or can_see_finance(user) or (can_see_admin(user) and not getattr(user, "base_id", None))))
 
 
 def is_driver(user):
@@ -328,7 +341,9 @@ def scoped_query(model, user):
 
 
 def can_access_company(user, company_id):
-    return user.is_master or user.company_id == company_id
+    if is_master_user(user):
+        return True
+    return same_id(getattr(user, "company_id", None), company_id)
 
 
 def can_access_base(user, base_id):
@@ -337,13 +352,13 @@ def can_access_base(user, base_id):
     base = CompanyBase.query.get(base_id)
     if not base:
         return False
-    if user.is_master:
+    if is_master_user(user):
         return True
-    if base.company_id != user.company_id:
+    if not same_id(base.company_id, getattr(user, "company_id", None)):
         return False
     if role_level(user) >= 3:
         return True
-    return not getattr(user, "base_id", None) or user.base_id == base_id
+    return not getattr(user, "base_id", None) or same_id(user.base_id, base_id)
 
 
 def company_base_options(company_id, selected_id=None, include_all=False):

@@ -27,7 +27,7 @@ class User(db.Model):
 
     @property
     def is_master(self):
-        return self.role == "master"
+        return (self.role or "").strip().lower() == "master"
 
     def to_dict(self):
         return {
