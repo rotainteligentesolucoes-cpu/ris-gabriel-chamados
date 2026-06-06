@@ -521,7 +521,7 @@ def layout(title, body, active="dashboard"):
             <a class="{active_class('dashboard')}" href="/dashboard">Dashboard</a>
             <a class="{active_class('implantacao')}" href="/web/implantacao">Implantacao guiada</a>
             <a class="{active_class('demo_comercial')}" href="/web/demo-comercial">Demo comercial</a>
-            <a class="{active_class('operacao')}" href="/web/operacao">Controle operacional</a>
+            <a class="{active_class('operacao')}" href="/web/operacao">Gestao operacional</a>
             <a class="{active_class('simulacao')}" href="/web/simulacao">Simulacao de rotas</a>
             <a class="{active_class('clientes')}" href="/web/clientes">Clientes</a>
             <a class="{active_class('mercadorias')}" href="/web/mercadorias">Mercadorias</a>
@@ -1180,7 +1180,7 @@ def areas_page():
 
     mvp_steps = [
         mvp_step("1", "Login e perfis", "Cada usuario entra direto no perfil liberado: operacional, gerencia, CEO ou motorista.", "/areas"),
-        mvp_step("2", "Controle operacional", "Torre do dia com rotas, mapa, linha do tempo, alertas, intervalos e execucao.", "/web/operacao"),
+        mvp_step("2", "Gestao operacional", "Torre do dia com rotas, mapa, linha do tempo, alertas, intervalos e execucao.", "/web/operacao"),
         mvp_step("3", "Simulacao / importacao / exportacao", "Importa planilha, simula rotas, ajusta custo/tempo e exporta o resultado.", "/web/simulacao"),
         mvp_step("4", "Motorista no celular", "Responsavel assume a rota, registra chegada, saida, observacoes, telemetria e comprovantes.", "/motorista"),
         mvp_step("5", "Dashboard e relatorio", "Cliente acompanha indicadores, clientes atendidos, rotas recentes e exporta Excel.", "/dashboard"),
@@ -1189,7 +1189,7 @@ def areas_page():
     operational_cards = [
         module_card("Implantacao Guiada", "Checklist comercial para ativar empresa, bases, colaboradores, clientes, rotas, execucao e relatorios.", "/web/implantacao", "IG", "#1f5eff", "Operacional"),
         module_card("Demonstracao Comercial", "Roteiro guiado para simular, oficializar, operar, abrir motorista e exportar relatorio.", "/web/demo-comercial", "DC", "#0f766e", "Operacional"),
-        module_card("Controle operacional", "Acompanhar mapas, pontos, previsoes e execucao das rotas.", "/web/operacao", "CO", "#1f5eff", "Operacional"),
+        module_card("Gestao operacional", "Acompanhar mapas, pontos, previsoes e execucao das rotas.", "/web/operacao", "GO", "#1f5eff", "Operacional"),
         module_card("Dashboard Operacional", "Indicadores, graficos e exportacao operacional para Excel.", "/dashboard", "DB", "#38bdf8", "Operacional"),
         module_card("Simulacao de Rotas", "Simule sequencias, tipos de veiculo, tempo e custo antes de gravar a operacao.", "/web/simulacao", "SR", "#f59e0b", "Operacional"),
         module_card("Cadastro de Clientes", "Cadastrar nome do cliente, latitude e longitude para montar rotas.", "/web/clientes", "CL", "#84cc16", "Operacional"),
@@ -1393,12 +1393,12 @@ def guided_implementation_page():
         {
             "key": "execucao",
             "title": "Execucao",
-            "description": "Controle operacional, motorista no celular, mercadorias, comprovantes e telemetria.",
+            "description": "Gestao operacional, motorista no celular, mercadorias, comprovantes e telemetria.",
             "count": f"{today_routes_count} rota(s) hoje | {merchandise_count} mercadoria(s)",
             "done": execution_done,
             "ready": official_done,
             "href": "/web/operacao",
-            "action": "Abrir controle",
+            "action": "Abrir gestao",
         },
         {
             "key": "relatorios",
@@ -2975,7 +2975,7 @@ def clients_page():
         client_tip_card = """
         <div class='client-tip'>
             <strong>Cadastro operacional</strong>
-            <p class='muted'>Cadastre apenas os clientes e locais reais da sua empresa. Esses pontos ficam disponiveis para simulacao, montagem de rotas e controle operacional.</p>
+            <p class='muted'>Cadastre apenas os clientes e locais reais da sua empresa. Esses pontos ficam disponiveis para simulacao, montagem de rotas e gestao operacional.</p>
         </div>
         """
     body = f"""
@@ -5971,9 +5971,9 @@ def commercial_demo_page():
             </div>
             <div class="demo-step">
                 <b>3</b>
-                <h3>Abrir controle operacional</h3>
+                <h3>Abrir gestao operacional</h3>
                 <p>Mostra a torre do dia com linha do tempo, mapa, pontos, alertas, intervalos e status de execucao.</p>
-                <a class="btn" href="/web/operacao?data={execution_date}">Abrir controle</a>
+                <a class="btn" href="/web/operacao?data={execution_date}">Abrir gestao</a>
             </div>
             <div class="demo-step">
                 <b>4</b>
@@ -7658,7 +7658,7 @@ def operational_page():
         }})();
     </script>
     """
-    return layout("Controle operacional", body, "operacao")
+    return layout("Gestao operacional", body, "operacao")
 
 
 @web_bp.route("/web/transferir-parada", methods=["POST"])
@@ -7722,7 +7722,7 @@ def manual_locations_page():
     rows = "".join(f"<tr><td>{location.name}</td><td>{location.company.name}</td><td>{location.location_type}</td><td>{format_coord(location.latitude)}, {format_coord(location.longitude)}</td><td>{location.notes or '-'}</td></tr>" for location in locations)
     body = f"""
     <div class='grid two'>
-        <div class='card'><h2>Cadastrar oficina ou apoio</h2><p class='muted'>Descanso e refeicao sao controlados em Intervalos e descanso da rota, dentro do controle operacional.</p><form method='post' class='grid'><label>Empresa</label><select name='company_id'>{company_options}</select><label>Nome</label><input name='name' required><label>Tipo</label><select name='location_type'><option value='oficina'>Oficina</option><option value='apoio'>Ponto de apoio</option><option value='posto'>Posto / abastecimento</option><option value='base_auxiliar'>Base auxiliar</option></select><label>Latitude</label><input name='latitude' required placeholder='-29.000000'><label>Longitude</label><input name='longitude' required placeholder='-53.000000'><label>Observacoes</label><input name='notes'><button class='btn' type='submit'>Salvar local</button></form></div>
+        <div class='card'><h2>Cadastrar oficina ou apoio</h2><p class='muted'>Descanso e refeicao sao controlados em Intervalos e descanso da rota, dentro da gestao operacional.</p><form method='post' class='grid'><label>Empresa</label><select name='company_id'>{company_options}</select><label>Nome</label><input name='name' required><label>Tipo</label><select name='location_type'><option value='oficina'>Oficina</option><option value='apoio'>Ponto de apoio</option><option value='posto'>Posto / abastecimento</option><option value='base_auxiliar'>Base auxiliar</option></select><label>Latitude</label><input name='latitude' required placeholder='-29.000000'><label>Longitude</label><input name='longitude' required placeholder='-53.000000'><label>Observacoes</label><input name='notes'><button class='btn' type='submit'>Salvar local</button></form></div>
         <div class='card'><h2>Locais cadastrados</h2><table class='table'><thead><tr><th>Nome</th><th>Empresa</th><th>Tipo</th><th>Coordenadas</th><th>Observacoes</th></tr></thead><tbody>{rows}</tbody></table></div>
     </div>
     """
