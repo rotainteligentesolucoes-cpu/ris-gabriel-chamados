@@ -3300,7 +3300,26 @@ def merchandises_page():
     if not selected_company_id:
         selected_company_id = user.company_id if not user.is_master else (Company.query.order_by(Company.name).first().id if Company.query.first() else None)
     if not selected_company_id or not can_access_company(user, selected_company_id):
-        return layout("Mercadorias", "<div class='card'><h2>Empresa nao encontrada para cadastro.</h2></div>", "mercadorias"), 403
+        empty_state = """
+        <div class='card'>
+            <h2>Selecione ou cadastre uma empresa para usar Mercadorias.</h2>
+            <p class='muted'>
+                Esta tela controla as mercadorias do estoque e da operacao: codigo da NF, pedido, cliente,
+                volume, peso, cubagem, lote, codigo de barras ou QR Code, rota vinculada e status
+                como pendente, carregado, em transito, entregue ou divergente.
+            </p>
+            <p class='muted'>
+                Primeiro cadastre a empresa contratante e seus clientes/pontos. Depois as mercadorias
+                poderao ser cadastradas manualmente, importadas por planilha e conferidas por leitor,
+                camera ou celular do motorista.
+            </p>
+            <div style='display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;'>
+                <a class='btn' href='/web/empresas'>Cadastrar empresa</a>
+                <a class='btn btn-light' href='/web/implantacao'>Abrir implantacao guiada</a>
+            </div>
+        </div>
+        """
+        return layout("Mercadorias", empty_state, "mercadorias"), 403
 
     message = ""
     if request.method == "POST":
