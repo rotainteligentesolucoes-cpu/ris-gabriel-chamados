@@ -7409,7 +7409,7 @@ def operational_page():
             for index in range(1, len(schedule) + 2)
         )
         add_stop_panel = f"""
-        <details class="add-service-stop-panel" open>
+        <details class="add-service-stop-panel">
             <summary>Adicionar parada de servico nesta rota</summary>
             <form method="post" action="/web/parada/adicionar-servico">
                 <input type="hidden" name="route_id" value="{selected_route.id}">
@@ -7611,22 +7611,6 @@ def operational_page():
             <div class="ops-toolbar">
                 <div class="route-list">{route_rows}</div>
                 <div class="ops-actions">
-                    <button type="button" data-view="balanced">Equilibrado</button>
-                    <button type="button" data-view="map">Mapa maior</button>
-                    <button type="button" data-view="list">Lista maior</button>
-                    <button type="button" data-density="compact">Compacto</button>
-                    <button type="button" data-swap="toggle">Inverter</button>
-                    <form method="post" action="/web/reorganizar-rota-ia">
-                        <input type="hidden" name="route_id" value="{selected_route.id}">
-                        <input type="hidden" name="return_to" value="operacao">
-                        <button type="submit">Reorganizar com IA</button>
-                    </form>
-                    <form method="post" action="/web/rota/inicio" class="start-time-form">
-                        <input type="hidden" name="route_id" value="{selected_route.id}">
-                        <label>Inicio</label>
-                        <input name="start_time" type="time" value="{selected_start_time}" required>
-                        <button type="submit">Salvar inicio</button>
-                    </form>
                     <form method="post" action="/web/rota/status" class="route-status-form">
                         <input type="hidden" name="route_id" value="{selected_route.id}">
                         <input type="hidden" name="action" value="start">
@@ -7641,6 +7625,27 @@ def operational_page():
                     </form>
                     <a href="/web/operacao?route_id={selected_route.id}">Atualizar</a>
                     <a href="/web/mapa/{selected_route.id}" target="_blank">Abrir mapa</a>
+                    <details class="ops-toolbox">
+                        <summary>Ferramentas</summary>
+                        <div class="ops-toolbox-panel">
+                            <button type="button" data-view="balanced">Equilibrado</button>
+                            <button type="button" data-view="map">Mapa maior</button>
+                            <button type="button" data-view="list">Lista maior</button>
+                            <button type="button" data-density="compact">Compacto</button>
+                            <button type="button" data-swap="toggle">Inverter</button>
+                            <form method="post" action="/web/reorganizar-rota-ia">
+                                <input type="hidden" name="route_id" value="{selected_route.id}">
+                                <input type="hidden" name="return_to" value="operacao">
+                                <button type="submit">Reorganizar com IA</button>
+                            </form>
+                            <form method="post" action="/web/rota/inicio" class="start-time-form">
+                                <input type="hidden" name="route_id" value="{selected_route.id}">
+                                <label>Inicio planejado</label>
+                                <input name="start_time" type="time" value="{selected_start_time}" required>
+                                <button type="submit">Salvar inicio</button>
+                            </form>
+                        </div>
+                    </details>
                 </div>
             </div>
             <div class="ops-header">
@@ -7715,11 +7720,11 @@ def operational_page():
         .history-quick-form {{ display:grid; grid-template-columns:minmax(150px, .8fr) minmax(220px, 1fr) auto auto; gap:10px; align-items:end; }}
         .history-quick-form label {{ color:#0b1f3a; font-weight:800; }}
         .history-quick-form input,.history-quick-form select {{ width:100%; margin-top:6px; border:1px solid #cbd5e1; border-radius:7px; padding:10px; font:inherit; background:#fff; }}
-        .day-selector-card {{ display:grid; grid-template-columns:minmax(160px,.65fr) minmax(210px,.9fr) minmax(250px,1.1fr) auto minmax(250px,1fr); gap:10px; align-items:end; margin-bottom:16px; padding:14px 16px; border:1px solid #cfd8e3; border-radius:8px; background:#fff; box-shadow:0 8px 24px rgba(16,24,40,.06); }}
+        .day-selector-card {{ display:grid; grid-template-columns:minmax(145px,.6fr) minmax(190px,.8fr) minmax(240px,1fr) auto minmax(230px,1fr); gap:10px; align-items:end; margin-bottom:12px; padding:12px 14px; border:1px solid #cfd8e3; border-radius:8px; background:#fff; box-shadow:0 8px 24px rgba(16,24,40,.05); }}
         .day-selector-card label {{ color:#0b1f3a; font-weight:900; }}
         .day-selector-card input,.day-selector-card select {{ width:100%; box-sizing:border-box; margin-top:6px; border:1px solid #cbd5e1; border-radius:7px; padding:10px; font:inherit; background:#fff; }}
         .day-selector-card span {{ color:#475467; font-weight:800; line-height:1.35; }}
-        .monitor-mode-card {{ display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:16px; padding:12px 16px; border:1px solid #cfd8e3; border-radius:8px; background:#fff; box-shadow:0 8px 24px rgba(16,24,40,.06); }}
+        .monitor-mode-card {{ display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:12px; padding:10px 14px; border:1px solid #cfd8e3; border-radius:8px; background:#fff; box-shadow:0 8px 24px rgba(16,24,40,.05); }}
         .monitor-mode-card strong {{ display:block; color:#0b1f3a; font-size:15px; }}
         .monitor-mode-card span {{ display:block; color:#667085; font-size:12px; margin-top:3px; }}
         .monitor-mode-actions {{ display:flex; gap:8px; flex-wrap:wrap; }}
@@ -7756,18 +7761,25 @@ def operational_page():
         .tower-legend {{ display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; color:#667085; font-size:12px; }}
         .tower-legend span {{ display:inline-flex; align-items:center; gap:6px; }}
         .tower-legend i {{ display:inline-block; width:12px; height:12px; border-radius:3px; }}
-        .ops-console {{ margin:-8px -8px 0; background:#eef3f8; border:1px solid #cfd8e3; min-height:calc(100vh - 110px); color:#172033; border-radius:8px; overflow:hidden; box-shadow:0 10px 30px rgba(16,24,40,.08); }}
-        .ops-toolbar {{ min-height:54px; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:#fff; border-bottom:1px solid #cfd8e3; }}
-        .route-list {{ display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; }}
-        .route-pill {{ display:block; min-width:168px; border:1px solid #cfd8e3; background:#fff; color:#1849a9; text-decoration:none; border-radius:4px; padding:8px 10px; }}
-        .route-pill.active {{ border-color:#1f5eff; box-shadow:inset 0 -3px 0 #1f5eff; }}
-        .route-pill strong {{ display:block; font-size:13px; }}
-        .route-pill span {{ display:block; color:#667085; font-size:11px; margin-top:3px; }}
-        .route-pill small {{ display:block; color:#1849a9; font-size:11px; margin-top:3px; font-weight:800; }}
-        .ops-actions {{ display:flex; gap:6px; white-space:nowrap; align-items:center; flex-wrap:wrap; justify-content:flex-end; }}
+        .ops-console {{ margin:0; background:#f5f7fb; border:1px solid #cfd8e3; min-height:calc(100vh - 170px); color:#172033; border-radius:8px; overflow:hidden; box-shadow:0 10px 30px rgba(16,24,40,.08); }}
+        .ops-toolbar {{ min-height:58px; display:grid; grid-template-columns:minmax(320px,1fr) auto; align-items:center; gap:12px; padding:10px 12px; background:#fff; border-bottom:1px solid #cfd8e3; position:sticky; top:0; z-index:8; }}
+        .route-list {{ display:flex; gap:8px; overflow-x:auto; padding:2px 2px 4px; scrollbar-width:thin; }}
+        .route-pill {{ display:block; min-width:154px; max-width:190px; border:1px solid #d7e0ec; background:#fff; color:#1849a9; text-decoration:none; border-radius:7px; padding:8px 10px; box-shadow:0 1px 2px rgba(16,24,40,.04); }}
+        .route-pill.active {{ border-color:#1f5eff; background:#eef4ff; box-shadow:inset 0 -3px 0 #1f5eff, 0 6px 18px rgba(31,94,255,.10); }}
+        .route-pill strong {{ display:block; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+        .route-pill span {{ display:block; color:#667085; font-size:10px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+        .route-pill small {{ display:block; color:#1849a9; font-size:10px; margin-top:3px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+        .ops-actions {{ display:flex; gap:7px; white-space:nowrap; align-items:center; flex-wrap:nowrap; justify-content:flex-end; }}
         .ops-actions form {{ margin:0; }}
         .ops-actions a,.ops-actions button,.mini-btn {{ border:1px solid #cfd8e3; background:#fff; color:#1849a9; text-decoration:none; border-radius:6px; padding:7px 10px; font-weight:800; font-size:12px; cursor:pointer; }}
         .ops-actions a:hover,.ops-actions button:hover,.ops-actions button.active {{ border-color:#1f5eff; background:#eef4ff; }}
+        .ops-toolbox {{ position:relative; }}
+        .ops-toolbox > summary {{ list-style:none; border:1px solid #cfd8e3; background:#fff; color:#1849a9; border-radius:6px; padding:7px 10px; font-weight:900; font-size:12px; cursor:pointer; }}
+        .ops-toolbox > summary::-webkit-details-marker {{ display:none; }}
+        .ops-toolbox[open] > summary {{ border-color:#1f5eff; background:#eef4ff; }}
+        .ops-toolbox-panel {{ position:absolute; right:0; top:calc(100% + 8px); width:300px; display:grid; gap:8px; padding:10px; border:1px solid #cfd8e3; border-radius:8px; background:#fff; box-shadow:0 18px 44px rgba(16,24,40,.18); z-index:20; }}
+        .ops-toolbox-panel button,.ops-toolbox-panel a {{ width:100%; text-align:left; }}
+        .ops-toolbox-panel .start-time-form {{ justify-content:space-between; }}
         .start-time-form {{ display:flex; gap:6px; align-items:center; padding:4px 6px; border:1px solid #cfd8e3; border-radius:7px; background:#fbfdff; }}
         .start-time-form label {{ font-size:11px; font-weight:900; color:#475467; }}
         .start-time-form input {{ width:86px; border:1px solid #cfd8e3; border-radius:5px; padding:6px; font-size:12px; }}
@@ -7776,27 +7788,27 @@ def operational_page():
         .route-status-form input {{ width:86px; border:1px solid #cfd8e3; border-radius:5px; padding:6px; font-size:12px; }}
         .route-status-form button {{ background:#16a34a; color:#fff; border-color:#16a34a; }}
         .route-status-form.finish button {{ background:#d92d20; border-color:#d92d20; color:#fff; }}
-        .ops-header {{ display:flex; justify-content:space-between; gap:12px; align-items:center; padding:10px 14px; background:#fff; border-bottom:1px solid #d9e2ec; font-size:12px; }}
+        .ops-header {{ display:flex; justify-content:space-between; gap:12px; align-items:center; padding:9px 14px; background:#fbfdff; border-bottom:1px solid #d9e2ec; font-size:12px; }}
         .ops-header strong {{ margin-right:10px; }} .ops-header span {{ margin-right:12px; color:#475467; }}
         .route-state {{ font-weight:800; color:#172033; }}
         .ops-metrics {{ display:grid; grid-template-columns:repeat(8,minmax(0,1fr)); gap:1px; background:#d9e2ec; border-bottom:1px solid #cfd8e3; }}
-        .ops-metrics div {{ background:#fbfdff; padding:10px 12px; min-height:58px; }}
+        .ops-metrics div {{ background:#fff; padding:8px 10px; min-height:48px; }}
         .ops-metrics strong {{ display:block; font-size:13px; color:#172033; }}
         .ops-metrics span {{ display:block; color:#667085; font-size:11px; margin-top:5px; }}
-        .ops-split {{ display:grid; grid-template-columns:minmax(470px, 52%) minmax(460px, 48%); min-height:calc(100vh - 360px); gap:0; }}
-        .ops-console.view-map .ops-split {{ grid-template-columns:minmax(360px, 38%) minmax(620px, 62%); }}
-        .ops-console.view-list .ops-split {{ grid-template-columns:minmax(620px, 64%) minmax(360px, 36%); }}
+        .ops-split {{ display:grid; grid-template-columns:minmax(430px, 43%) minmax(560px, 57%); min-height:calc(100vh - 305px); gap:0; }}
+        .ops-console.view-map .ops-split {{ grid-template-columns:minmax(360px, 34%) minmax(650px, 66%); }}
+        .ops-console.view-list .ops-split {{ grid-template-columns:minmax(680px, 60%) minmax(420px, 40%); }}
         .ops-console.swapped .ops-left {{ order:2; border-right:0; border-left:2px solid #cfd8e3; }}
         .ops-console.swapped .ops-map {{ order:1; }}
         .ops-left {{ background:#fff; border-right:2px solid #cfd8e3; overflow:hidden; display:flex; flex-direction:column; min-width:0; }}
         .route-id {{ padding:10px 14px; font-size:12px; border-bottom:1px solid #d9e2ec; background:#fbfdff; }}
         .route-id strong {{ display:block; color:#172033; }} .route-id span {{ color:#667085; }}
         .ops-table-wrap {{ overflow:auto; flex:1; }}
-        .ops-table {{ width:100%; border-collapse:separate; border-spacing:0; min-width:760px; font-size:12px; }}
-        .ops-table th {{ position:sticky; top:0; z-index:1; background:#344054; color:#fff; text-align:left; padding:9px 10px; font-size:11px; }}
+        .ops-table {{ width:100%; border-collapse:separate; border-spacing:0; min-width:700px; font-size:12px; }}
+        .ops-table th {{ position:sticky; top:0; z-index:1; background:#344054; color:#fff; text-align:left; padding:7px 9px; font-size:10px; letter-spacing:0; }}
         .ops-table th:first-child {{ border-top-left-radius:0; }}
         .ops-table th:last-child {{ border-top-right-radius:0; }}
-        .ops-table td {{ border-bottom:1px solid #e5e7eb; padding:9px 10px; vertical-align:top; background:#fff; }}
+        .ops-table td {{ border-bottom:1px solid #e5e7eb; padding:8px 9px; vertical-align:top; background:#fff; }}
         .ops-table tr:nth-child(even) td {{ background:#f8fafc; }}
         .ops-table tr.selected-reorder td {{ background:#fff7ed; box-shadow:inset 0 0 0 999px rgba(247,144,9,.08); }}
         .ops-table td span {{ color:#667085; font-size:11px; }}
@@ -7819,8 +7831,10 @@ def operational_page():
         .ops-break-panel {{ padding:12px; border-top:1px solid #d9e2ec; background:#fbfdff; }}
         .ops-break-panel details {{ border:1px solid #d9e2ec; border-radius:6px; padding:10px; background:#fff; }}
         .ops-break-panel summary {{ cursor:pointer; color:#1849a9; font-weight:900; }}
-        .add-service-stop-panel {{ border-bottom:1px solid #d9e2ec; background:#f8fbff; padding:10px 12px; }}
-        .add-service-stop-panel summary {{ cursor:pointer; color:#1849a9; font-weight:900; }}
+        .add-service-stop-panel {{ border-bottom:1px solid #d9e2ec; background:#f8fbff; padding:8px 12px; }}
+        .add-service-stop-panel summary {{ cursor:pointer; color:#1849a9; font-weight:900; list-style:none; display:flex; align-items:center; gap:8px; }}
+        .add-service-stop-panel summary:before {{ content:"+"; display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; background:#eef4ff; color:#1849a9; border:1px solid #c7d7fe; }}
+        .add-service-stop-panel[open] summary:before {{ content:"-"; }}
         .add-service-stop-panel form {{ display:grid; grid-template-columns:minmax(180px,1.4fr) minmax(120px,.75fr) minmax(110px,.6fr) auto auto; gap:8px; align-items:end; margin-top:10px; }}
         .add-service-stop-panel label {{ color:#0b1f3a; font-size:11px; font-weight:900; }}
         .add-service-stop-panel .full {{ grid-column:1 / span 3; }}
@@ -7833,9 +7847,9 @@ def operational_page():
         .mini-btn.danger {{ color:#b42318; border-color:#fda29b; background:#fff1f3; }}
         .break-actions {{ margin:8px 0; }}
         .ops-table-wrap.small {{ max-height:210px; margin-top:8px; }}
-        .ops-map {{ position:relative; background:#eef3f8; min-height:calc(100vh - 360px); min-width:0; overflow:hidden; }}
+        .ops-map {{ position:relative; background:#eef3f8; min-height:calc(100vh - 305px); min-width:0; overflow:hidden; }}
         .ops-map iframe {{ position:absolute; inset:0; width:100%; height:100%; min-height:100%; border:0; display:block; background:#eef3f8; }}
-        .route-track {{ position:absolute; left:16px; right:16px; bottom:12px; height:48px; display:grid; grid-template-columns:1fr; align-items:center; gap:8px; background:rgba(255,255,255,.92); border:1px solid #cfd8e3; border-radius:6px; padding:7px 14px; box-shadow:0 8px 26px rgba(16,24,40,.16); backdrop-filter:blur(6px); z-index:5; }}
+        .route-track {{ position:absolute; left:18px; right:18px; bottom:14px; height:42px; display:grid; grid-template-columns:1fr; align-items:center; gap:8px; background:rgba(255,255,255,.94); border:1px solid #cfd8e3; border-radius:8px; padding:5px 14px; box-shadow:0 8px 26px rgba(16,24,40,.16); backdrop-filter:blur(6px); z-index:5; }}
         .home-mark {{ display:grid; place-items:center; color:#172033; font-weight:800; }}
         .track-line {{ height:34px; background:transparent; position:relative; }}
         .track-route-line {{ position:absolute; top:50%; transform:translateY(-50%); height:4px; border-radius:999px; }}
@@ -7883,8 +7897,8 @@ def operational_page():
     <section data-monitor-panel="map">{detail}</section>
     <script>
         (function () {{
-            const monitorKey = 'ris.ops.monitor';
-            const savedMonitor = localStorage.getItem(monitorKey) || 'complete';
+            const monitorKey = 'ris.ops.monitor.v2';
+            const savedMonitor = localStorage.getItem(monitorKey) || 'map';
 
             function applyMonitor() {{
                 document.body.classList.remove('monitor-timeline', 'monitor-map', 'monitor-complete');
