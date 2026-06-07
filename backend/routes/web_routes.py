@@ -413,36 +413,55 @@ def percurso_pelas_ruas(points):
     }
     if len(points) < 2:
         return fallback
-    if not ORS_API_KEY or ORS_API_KEY == "SUA_CHAVE_OPENROUTESERVICE":
-        fallback["message"] = "Percurso em linha reta: chave OpenRouteService nao configurada."
-        return fallback
 
     coordinates = [[lon, lat] for lat, lon in points]
-    try:
-        response = requests.post(
-            "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
-            json={"coordinates": coordinates},
-            headers={"Authorization": ORS_API_KEY, "Content-Type": "application/json"},
-            timeout=20,
-            verify=False,
-        )
-        data = response.json()
-    except Exception as exc:
-        fallback["message"] = f"Percurso em linha reta: falha ao chamar API de rotas ({exc})."
-        return fallback
+    if ORS_API_KEY and ORS_API_KEY != "SUA_CHAVE_OPENROUTESERVICE":
+        try:
+            response = requests.post(
+                "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+                json={"coordinates": coordinates},
+                headers={"Authorization": ORS_API_KEY, "Content-Type": "application/json"},
+                timeout=20,
+                verify=False,
+            )
+            data = response.json()
+            if "features" in data:
+                geometry = data["features"][0]["geometry"]["coordinates"]
+                summary = data["features"][0].get("properties", {}).get("summary", {})
+                return {
+                    "line": [[lat, lon] for lon, lat in geometry],
+                    "distance_km": (summary.get("distance") or 0) / 1000,
+                    "real_route": True,
+                    "message": "Percurso calculado pelas ruas.",
+                }
+            fallback["message"] = f"Percurso em linha reta: API nao retornou trajeto ({data.get('error', data)})."
+        except Exception as exc:
+            fallback["message"] = f"Percurso em linha reta: falha ao chamar API de rotas ({exc})."
 
-    if "features" not in data:
-        fallback["message"] = f"Percurso em linha reta: API nao retornou trajeto ({data.get('error', data)})."
-        return fallback
-
-    geometry = data["features"][0]["geometry"]["coordinates"]
-    summary = data["features"][0].get("properties", {}).get("summary", {})
-    return {
-        "line": [[lat, lon] for lon, lat in geometry],
-        "distance_km": (summary.get("distance") or 0) / 1000,
-        "real_route": True,
-        "message": "Percurso calculado pelas ruas.",
-    }
+    if len(points) <= 25:
+        try:
+            coord_text = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in points)
+            response = requests.get(
+                f"https://router.project-osrm.org/route/v1/driving/{coord_text}",
+                params={"overview": "full", "geometries": "geojson", "steps": "false"},
+                timeout=20,
+            )
+            data = response.json()
+            if data.get("code") == "Ok" and data.get("routes"):
+                route_data = data["routes"][0]
+                geometry = route_data["geometry"]["coordinates"]
+                return {
+                    "line": [[lat, lon] for lon, lat in geometry],
+                    "distance_km": (route_data.get("distance") or 0) / 1000,
+                    "real_route": True,
+                    "message": "Percurso calculado por ruas/rodovias.",
+                }
+            fallback["message"] = f"Percurso em linha reta: roteador publico nao retornou trajeto ({data.get('message') or data.get('code')})."
+        except Exception as exc:
+            fallback["message"] = f"Percurso em linha reta: roteador publico indisponivel ({exc})."
+    else:
+        fallback["message"] = "Percurso em linha reta: rota com muitos pontos para roteador publico."
+    return fallback
 
 
 def route_distance(route):
@@ -4240,6 +4259,8 @@ def telemetry_page():
             notes=request.form.get("notes") or None,
         ))
         db.session.commit()
+        if request.form.get("ajax") == "1":
+            return ("", 204)
         if is_driver(user):
             return redirect(url_for("web_bp.driver_page"))
         return redirect(url_for("web_bp.telemetry_page"))
@@ -4564,6 +4585,7 @@ def route_map_page(route_id):
     <div style="position: fixed; bottom: 24px; left: 24px; z-index: 9999; background: white; padding: 10px 12px; border: 1px solid #d7e0ec; border-radius: 8px; font-family: Arial; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.16);">
         <strong>{escape(route.name)}</strong><br>
         <span style="color:{line_color};font-weight:900;">▬</span> Trajeto da rota<br>
+        <small>{escape(route_path["message"])}</small><br>
         <hr style="border:0;border-top:1px solid #e5e7eb;margin:6px 0;">
         <strong>Status dos pontos</strong><br>
         <span style="color:#d92d20;font-weight:800;">●</span> A fazer<br>
@@ -6698,6 +6720,7 @@ def simulation_map_page():
     <div style="position: fixed; bottom: 24px; left: 24px; z-index: 9999; background: white; padding: 10px 12px; border: 1px solid #d7e0ec; border-radius: 8px; font-family: Arial; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.16);">
         <strong>Rotas simuladas</strong><br>
         {legend_rows}
+        <small>Trajeto real quando o roteador estiver disponivel; pontilhado indica fallback.</small>
     </div>
     """
     mapa.get_root().html.add_child(folium.Element(legend))
@@ -8265,6 +8288,56 @@ def driver_route_for(user):
     return LogisticRoute.query.filter_by(driver_user_id=user.id).order_by(LogisticRoute.id.desc()).first()
 
 
+def driver_navigation_target(route):
+    stops = sorted(route.stops, key=lambda item: item.sequence)
+    for stop in stops:
+        if (stop.status or "pendente").lower() != "realizado":
+            return {
+                "kind": "stop",
+                "stop": stop,
+                "label": f"{stop.sequence}. {stop.client.name}",
+                "subtitle": f"Janela {stop.client.delivery_window_start or '-'} - {stop.client.delivery_window_end or '-'} | {format_coord(stop.client.latitude)}, {format_coord(stop.client.longitude)}",
+                "lat": stop.client.latitude,
+                "lon": stop.client.longitude,
+            }
+    return {
+        "kind": "base",
+        "stop": None,
+        "label": "BASE - retorno e finalizacao da rota",
+        "subtitle": f"{format_coord(BASE_LATITUDE)}, {format_coord(BASE_LONGITUDE)}",
+        "lat": BASE_LATITUDE,
+        "lon": BASE_LONGITUDE,
+    }
+
+
+def navigation_links(lat, lon, label):
+    destination = f"{float(lat):.6f},{float(lon):.6f}"
+    google = f"https://www.google.com/maps/dir/?api=1&destination={destination}&travelmode=driving"
+    waze = f"https://waze.com/ul?ll={destination}&navigate=yes"
+    return google, waze
+
+
+def driver_navigation_panel(route, assumed):
+    target = driver_navigation_target(route)
+    google_url, waze_url = navigation_links(target["lat"], target["lon"], target["label"])
+    disabled_note = "" if assumed else "<p class='muted'>Assuma a rota para liberar a navegacao ponto a ponto.</p>"
+    button_attr = "" if assumed else "aria-disabled='true' onclick='return false;'"
+    return f"""
+    <div class='card driver-nav-card' style='margin-bottom:16px;'>
+        <div>
+            <span class='badge'>Proxima navegacao</span>
+            <h2>{escape(target["label"])}</h2>
+            <p class='muted'>{escape(target["subtitle"])}</p>
+            {disabled_note}
+        </div>
+        <div class='driver-nav-actions'>
+            <a class='btn nav-launch' data-nav='google' href='{google_url}' target='_blank' rel='noopener' {button_attr}>Abrir Google Maps</a>
+            <a class='btn btn-light nav-launch' data-nav='waze' href='{waze_url}' target='_blank' rel='noopener' {button_attr}>Abrir Waze</a>
+        </div>
+    </div>
+    """
+
+
 def merchandise_summary_for_stop(stop):
     items = Merchandise.query.filter_by(route_stop_id=stop.id).all()
     if not items:
@@ -8540,6 +8613,24 @@ def driver_page():
     if not proof_rows:
         proof_rows = "<tr><td colspan='6'>Nenhum comprovante registrado ainda.</td></tr>"
     body = f"""
+    <style>
+        .driver-nav-card {{
+            display:grid;
+            grid-template-columns:minmax(260px,1fr) auto;
+            gap:16px;
+            align-items:center;
+            border-left:5px solid #1f5eff;
+        }}
+        .driver-nav-card h2 {{ margin:8px 0 4px; }}
+        .driver-nav-actions {{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }}
+        .driver-nav-actions a[aria-disabled='true'] {{ opacity:.55; pointer-events:none; }}
+        @media(max-width:720px) {{
+            .driver-nav-card {{ grid-template-columns:1fr; }}
+            .driver-nav-actions {{ justify-content:stretch; }}
+            .driver-nav-actions .btn {{ width:100%; text-align:center; }}
+        }}
+    </style>
+    {driver_navigation_panel(route, assumed)}
     {action_panel}
     <div class='grid two'>
         <div class='card'>
@@ -8590,6 +8681,51 @@ def driver_page():
     </div>
     <script>
         (function () {{
+            const routeId = "{route.id}";
+            let lastAutoTelemetry = 0;
+            function collectBattery() {{
+                if (!navigator.getBattery) return Promise.resolve('');
+                return navigator.getBattery().then(function (battery) {{
+                    return String(Math.round(battery.level * 100));
+                }}).catch(function () {{ return ''; }});
+            }}
+            function sendTelemetryPosition(pos, note) {{
+                const now = Date.now();
+                if (!note && now - lastAutoTelemetry < 60000) return;
+                lastAutoTelemetry = now;
+                collectBattery().then(function (battery) {{
+                    const payload = new URLSearchParams();
+                    payload.set('route_id', routeId);
+                    payload.set('ajax', '1');
+                    payload.set('source', 'motorista_mobile_auto');
+                    payload.set('latitude', pos.coords.latitude.toFixed(6));
+                    payload.set('longitude', pos.coords.longitude.toFixed(6));
+                    if (pos.coords.speed !== null) payload.set('speed_kmh', (pos.coords.speed * 3.6).toFixed(1));
+                    if (battery) payload.set('battery_percent', battery);
+                    payload.set('signal_quality', 'bom');
+                    payload.set('notes', note || 'Telemetria automatica do celular');
+                    fetch('/web/telemetria', {{
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {{ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }},
+                        body: payload.toString(),
+                        keepalive: true
+                    }}).catch(function () {{}});
+                }});
+            }}
+            if ({'true' if assumed else 'false'} && navigator.geolocation) {{
+                navigator.geolocation.watchPosition(function (pos) {{
+                    sendTelemetryPosition(pos);
+                }}, function () {{}}, {{ enableHighAccuracy:true, timeout:10000, maximumAge:30000 }});
+            }}
+            document.querySelectorAll('.nav-launch').forEach(function (link) {{
+                link.addEventListener('click', function () {{
+                    if (!navigator.geolocation) return;
+                    navigator.geolocation.getCurrentPosition(function (pos) {{
+                        sendTelemetryPosition(pos, 'Posicao enviada antes de abrir navegacao externa: ' + (link.dataset.nav || 'gps'));
+                    }}, function () {{}}, {{ enableHighAccuracy:true, timeout:3500, maximumAge:15000 }});
+                }});
+            }});
             const btn = document.getElementById('fillTelemetry');
             const form = document.getElementById('mobileTelemetryForm');
             if (!btn || !form) return;
