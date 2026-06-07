@@ -2817,6 +2817,20 @@ def routes_page():
         return redirect(url_for("web_bp.driver_page"))
     rows = ""
     visible_routes = sorted(scoped_query(LogisticRoute, user).all(), key=route_sort_key)
+
+    def driver_user_options(company_id, selected_id=None):
+        drivers = User.query.filter(
+            User.company_id == company_id,
+            User.active == True,
+            User.role.in_(("driver", "motorista")),
+        ).order_by(User.name).all()
+        options = [f"<option value='' {'selected' if not selected_id else ''}>Sem login vinculado</option>"]
+        for driver in drivers:
+            selected = "selected" if selected_id == driver.id else ""
+            base_label = driver.base.name if getattr(driver, "base", None) else "Todas as bases"
+            options.append(f"<option value='{driver.id}' {selected}>{escape(driver.name)} | {escape(driver.email)} | {escape(base_label)}</option>")
+        return "".join(options)
+
     vehicle_options = "".join(
         f"<option value='{vehicle.id}'>{escape(vehicle.name)} | {escape(vehicle.vehicle_type)} | {vehicle.average_speed_kmh} km/h | {escape(vehicle.company.name if vehicle.company else '')}</option>"
         for vehicle in scoped_query(Vehicle, user).filter_by(active=True).order_by(Vehicle.name).all()
@@ -2841,6 +2855,7 @@ def routes_page():
             <input type="hidden" name="route_id" value="{route.id}">
             <input name="name" value="{route_display_name(route)}" placeholder="Ex: ROTA 1" style="min-width:130px;">
             <input name="driver_name" value="{escape(route.driver_name or '')}" placeholder="Responsavel, regiao ou info" style="min-width:190px;">
+            <select name="driver_user_id" title="Login do motorista vinculado a esta rota" style="min-width:220px;">{driver_user_options(route.company_id, route.driver_user_id)}</select>
             <button class="btn btn-light" type="submit">Salvar</button>
         </form>
         """
@@ -2943,7 +2958,18 @@ def rename_route_page():
     name = request.form.get("name", "").strip()
     if name:
         route.name = name[:120]
-    route.driver_name = request.form.get("driver_name", "").strip()[:120] or None
+    driver_user_id = request.form.get("driver_user_id", type=int)
+    driver_user = None
+    if driver_user_id:
+        driver_user = User.query.get(driver_user_id)
+        if not driver_user or not is_driver(driver_user) or not driver_user.active:
+            return layout("Rotas", "<div class='card'><h2>Motorista invalido ou inativo.</h2><a class='btn' href='/web/rotas'>Voltar</a></div>", "rotas"), 400
+        if driver_user.company_id != route.company_id:
+            return layout("Rotas", "<div class='card'><h2>Motorista de outra empresa.</h2><a class='btn' href='/web/rotas'>Voltar</a></div>", "rotas"), 400
+        if driver_user.base_id and route.base_id and driver_user.base_id != route.base_id:
+            return layout("Rotas", "<div class='card'><h2>Motorista de outra base.</h2><a class='btn' href='/web/rotas'>Voltar</a></div>", "rotas"), 400
+    route.driver_user_id = driver_user.id if driver_user else None
+    route.driver_name = request.form.get("driver_name", "").strip()[:120] or (driver_user.name if driver_user else None)
     from database.database import db
     db.session.commit()
     return redirect(url_for("web_bp.routes_page"))
