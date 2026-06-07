@@ -33,6 +33,14 @@ from models.vehicle import Vehicle
 
 web_bp = Blueprint("web_bp", __name__)
 
+
+@web_bp.route("/service-worker.js")
+def pwa_service_worker():
+    response = send_file(os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "service-worker.js"), mimetype="application/javascript")
+    response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
 COR_TRAJETO = "#1f5eff"
 COR_PONTO = "#d92d20"
 ROUTE_COLORS = ["#1f5eff", "#f97316", "#16a34a", "#7c3aed", "#dc2626", "#0891b2", "#ca8a04", "#be185d", "#0f766e", "#4338ca"]
@@ -567,6 +575,11 @@ def layout(title, body, active="dashboard"):
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#031426">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-title" content="RIS">
+        <link rel="manifest" href="/static/manifest.webmanifest">
+        <link rel="apple-touch-icon" href="/static/img/pwa-icon-192.png">
         <title>{title} - RIS</title>
         <style>
             :root {{
@@ -635,6 +648,13 @@ def layout(title, body, active="dashboard"):
                 {body}
             </main>
         </div>
+        <script>
+            if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {{
+                window.addEventListener('load', function () {{
+                    navigator.serviceWorker.register('/service-worker.js').catch(function () {{}});
+                }});
+            }}
+        </script>
         <script>
             (function () {{
                 const key = 'ris.sidebar.collapsed';
@@ -786,6 +806,11 @@ LOGIN_TEMPLATE = """
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#031426">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="RIS">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/img/pwa-icon-192.png">
     <title>Login - RIS</title>
     <style>
         * { box-sizing:border-box; }
@@ -1165,6 +1190,11 @@ LOGIN_TEMPLATE = """
         </div>
         <div class="lgpd">LGPD Ready | Conexao Criptografada</div>
         <script>
+            if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+                window.addEventListener('load', function () {
+                    navigator.serviceWorker.register('/service-worker.js').catch(function () {});
+                });
+            }
             const loginToggle = document.getElementById('loginToggle');
             const toggle = document.getElementById('contactToggle');
             const side = document.getElementById('loginSide');
