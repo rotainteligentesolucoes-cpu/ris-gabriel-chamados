@@ -7409,8 +7409,8 @@ def operational_page():
             for index in range(1, len(schedule) + 2)
         )
         add_stop_panel = f"""
-        <details class="add-service-stop-panel">
-            <summary>Adicionar parada de servico nesta rota</summary>
+        <details class="add-service-stop-panel" id="novo-servico">
+            <summary><span>Novo servico</span><small>Adicionar cliente/local nesta rota</small></summary>
             <form method="post" action="/web/parada/adicionar-servico">
                 <input type="hidden" name="route_id" value="{selected_route.id}">
                 <label>Cliente / local
@@ -7623,6 +7623,7 @@ def operational_page():
                         <input name="event_time" type="time" value="{selected_actual_end or completion}" required>
                         <button type="submit">Finalizar rota</button>
                     </form>
+                    <a class="primary-action" href="#novo-servico" data-open-details="novo-servico">+ Novo servico</a>
                     <a href="/web/operacao?route_id={selected_route.id}">Atualizar</a>
                     <a href="/web/mapa/{selected_route.id}" target="_blank">Abrir mapa</a>
                     <details class="ops-toolbox">
@@ -7773,6 +7774,8 @@ def operational_page():
         .ops-actions form {{ margin:0; }}
         .ops-actions a,.ops-actions button,.mini-btn {{ border:1px solid #cfd8e3; background:#fff; color:#1849a9; text-decoration:none; border-radius:6px; padding:7px 10px; font-weight:800; font-size:12px; cursor:pointer; }}
         .ops-actions a:hover,.ops-actions button:hover,.ops-actions button.active {{ border-color:#1f5eff; background:#eef4ff; }}
+        .ops-actions a.primary-action {{ background:#16a34a; border-color:#16a34a; color:#fff; box-shadow:0 8px 18px rgba(22,163,74,.18); }}
+        .ops-actions a.primary-action:hover {{ background:#15803d; border-color:#15803d; color:#fff; }}
         .ops-toolbox {{ position:relative; }}
         .ops-toolbox > summary {{ list-style:none; border:1px solid #cfd8e3; background:#fff; color:#1849a9; border-radius:6px; padding:7px 10px; font-weight:900; font-size:12px; cursor:pointer; }}
         .ops-toolbox > summary::-webkit-details-marker {{ display:none; }}
@@ -7833,6 +7836,8 @@ def operational_page():
         .ops-break-panel summary {{ cursor:pointer; color:#1849a9; font-weight:900; }}
         .add-service-stop-panel {{ border-bottom:1px solid #d9e2ec; background:#f8fbff; padding:8px 12px; }}
         .add-service-stop-panel summary {{ cursor:pointer; color:#1849a9; font-weight:900; list-style:none; display:flex; align-items:center; gap:8px; }}
+        .add-service-stop-panel summary span {{ font-size:14px; }}
+        .add-service-stop-panel summary small {{ color:#667085; font-size:11px; font-weight:800; }}
         .add-service-stop-panel summary:before {{ content:"+"; display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; background:#eef4ff; color:#1849a9; border:1px solid #c7d7fe; }}
         .add-service-stop-panel[open] summary:before {{ content:"-"; }}
         .add-service-stop-panel form {{ display:grid; grid-template-columns:minmax(180px,1.4fr) minmax(120px,.75fr) minmax(110px,.6fr) auto auto; gap:8px; align-items:end; margin-top:10px; }}
@@ -7949,6 +7954,16 @@ def operational_page():
                 const swapped = localStorage.getItem('ris.ops.swap') === 'true';
                 localStorage.setItem('ris.ops.swap', swapped ? 'false' : 'true');
                 apply();
+            }}));
+
+            document.querySelectorAll('[data-open-details]').forEach(link => link.addEventListener('click', function (event) {{
+                const panel = document.getElementById(this.dataset.openDetails);
+                if (!panel) return;
+                event.preventDefault();
+                panel.open = true;
+                panel.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                const firstField = panel.querySelector('select, input, textarea');
+                if (firstField) setTimeout(() => firstField.focus(), 250);
             }}));
         }})();
     </script>
