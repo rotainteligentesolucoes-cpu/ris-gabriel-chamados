@@ -369,6 +369,40 @@ def can_access_base(user, base_id):
     return not getattr(user, "base_id", None) or same_id(user.base_id, base_id)
 
 
+def company_dependency_counts(company_id):
+    return {
+        "bases": CompanyBase.query.filter_by(company_id=company_id).count(),
+        "colaboradores": User.query.filter_by(company_id=company_id).count(),
+        "clientes": Client.query.filter_by(company_id=company_id).count(),
+        "veiculos": Vehicle.query.filter_by(company_id=company_id).count(),
+        "rotas": LogisticRoute.query.filter_by(company_id=company_id).count(),
+        "mercadorias": Merchandise.query.filter_by(company_id=company_id).count(),
+        "comprovantes": StopProof.query.filter_by(company_id=company_id).count(),
+        "telemetria": TelemetryEvent.query.filter_by(company_id=company_id).count(),
+        "locais": ManualLocation.query.filter_by(company_id=company_id).count(),
+    }
+
+
+def company_can_be_deleted(company_id):
+    return not any(company_dependency_counts(company_id).values())
+
+
+def base_dependency_counts(base_id):
+    return {
+        "sub-bases": CompanyBase.query.filter_by(parent_base_id=base_id).count(),
+        "colaboradores": User.query.filter_by(base_id=base_id).count(),
+        "clientes": Client.query.filter_by(base_id=base_id).count(),
+        "veiculos": Vehicle.query.filter_by(base_id=base_id).count(),
+        "rotas": LogisticRoute.query.filter_by(base_id=base_id).count(),
+        "mercadorias": Merchandise.query.filter_by(base_id=base_id).count(),
+        "locais": ManualLocation.query.filter_by(base_id=base_id).count(),
+    }
+
+
+def base_can_be_deleted(base_id):
+    return not any(base_dependency_counts(base_id).values())
+
+
 def company_base_options(company_id, selected_id=None, include_all=False):
     bases = CompanyBase.query.filter_by(company_id=company_id, active=True).order_by(CompanyBase.base_type.desc(), CompanyBase.name).all()
     options = "<option value=''>Todas as bases</option>" if include_all else "<option value=''>Sem base definida</option>"
@@ -790,6 +824,10 @@ def login_page():
         else:
             user = User.query.filter_by(email=email).first()
             if user and user.active and check_password_hash(user.password, password):
+                if user.company and not user.company.active and not user.is_master:
+                    error = "Empresa adormecida. Procure o responsavel da plataforma para reativar o acesso."
+                    side_state = " login-open"
+                    return render_template_string(LOGIN_TEMPLATE, error=error, contact_notice=contact_notice, side_state=side_state, insights_json=json.dumps(public_insights_payload(), ensure_ascii=False))
                 if not request.form.get("accept_terms"):
                     error = "Para acessar, aceite os Termos de Uso e Licenca da plataforma."
                     side_state = " login-open"
@@ -2229,6 +2267,30 @@ def company_bases_page():
     )
     rows = ""
     for base in bases:
+        dependency_summary = ", ".join(f"{label}: {count}" for label, count in base_dependency_counts(base.id).items() if count)
+        if can_manage_bases(user):
+            status_label = "Adormecer" if base.active else "Reativar"
+            base_actions = f"""
+            <div class='action-stack'>
+                <form method='post' action='/web/bases/status'>
+                    <input type='hidden' name='base_id' value='{base.id}'>
+                    <input type='hidden' name='company_id' value='{selected_company_id or ""}'>
+                    <button class='mini-btn {"danger" if base.active else ""}' type='submit'>{status_label}</button>
+                </form>
+            """
+            if base_can_be_deleted(base.id):
+                base_actions += f"""
+                <form method='post' action='/web/bases/excluir' onsubmit="return confirm('Excluir esta base? Esta acao so deve ser usada para cadastro criado por engano.');">
+                    <input type='hidden' name='base_id' value='{base.id}'>
+                    <input type='hidden' name='company_id' value='{selected_company_id or ""}'>
+                    <button class='mini-btn danger' type='submit'>Excluir</button>
+                </form>
+                """
+            else:
+                base_actions += f"<span class='muted' title='{escape(dependency_summary)}'>Excluir bloqueado</span>"
+            base_actions += "</div>"
+        else:
+            base_actions = "-"
         rows += f"""
         <tr>
             <td><strong>{escape(base.name)}</strong><br><span class='muted'>{escape(base.city or '-')}</span></td>
@@ -2236,10 +2298,11 @@ def company_bases_page():
             <td>{escape(base.parent.name if base.parent else '-')}</td>
             <td>{escape(base.address or '-')}</td>
             <td><span class='badge {"badge-success" if base.active else "badge-danger"}'>{'Ativa' if base.active else 'Inativa'}</span></td>
+            <td>{base_actions}</td>
         </tr>
         """
     if not rows:
-        rows = "<tr><td colspan='5'>Nenhuma base cadastrada para esta empresa.</td></tr>"
+        rows = "<tr><td colspan='6'>Nenhuma base cadastrada para esta empresa.</td></tr>"
 
     form_company_field = f"<input type='hidden' name='company_id' value='{selected_company_id or ''}'>"
     if user.is_master:
@@ -2280,6 +2343,7 @@ def company_bases_page():
     <div class='card' style='margin-bottom:16px;'>
         <h2>Matriz, bases e unidades</h2>
         <p class='muted'>Use esta camada para separar rotas, clientes, veiculos e usuarios por filial/base. CEO ve todas; gerente com base definida ve somente a sua base.</p>
+        <p class='muted'>Para cadastrar a empresa contratante, acesse <a href='/web/empresas'>Empresas</a>. Esta tela cadastra matriz, filial e base dentro de uma empresa ja criada.</p>
         {company_select}
         {message}
     </div>
@@ -2288,13 +2352,48 @@ def company_bases_page():
         <div class='card'>
             <h2>Bases cadastradas</h2>
             <div class='table-wrap'><table class='table'>
-                <thead><tr><th>Base</th><th>Tipo</th><th>Vinculo</th><th>Endereco</th><th>Status</th></tr></thead>
+                <thead><tr><th>Base</th><th>Tipo</th><th>Vinculo</th><th>Endereco</th><th>Status</th><th>Acao</th></tr></thead>
                 <tbody>{rows}</tbody>
             </table></div>
         </div>
     </div>
     """
     return layout("Bases / Unidades", body, "bases")
+
+
+@web_bp.route("/web/bases/status", methods=["POST"])
+@web_login_required
+def company_base_status_page():
+    user = request.web_user
+    if not can_manage_bases(user):
+        return layout("Acesso negado", "<div class='card'><h2>Seu perfil nao pode alterar bases.</h2></div>", "bases"), 403
+    base = CompanyBase.query.get_or_404(request.form.get("base_id", type=int))
+    if not can_access_base(user, base.id):
+        return layout("Acesso negado", "<div class='card'><h2>Base fora da sua permissao.</h2></div>", "bases"), 403
+    base.active = not bool(base.active)
+    audit_event("base_status_toggle", user=user, company_id=base.company_id, resource_type="company_base", resource_id=base.id, details=f"{base.name}: {'ativa' if base.active else 'inativa'}")
+    db.session.commit()
+    return redirect(url_for("web_bp.company_bases_page", company_id=request.form.get("company_id", type=int) or base.company_id))
+
+
+@web_bp.route("/web/bases/excluir", methods=["POST"])
+@web_login_required
+def company_base_delete_page():
+    user = request.web_user
+    if not can_manage_bases(user):
+        return layout("Acesso negado", "<div class='card'><h2>Seu perfil nao pode excluir bases.</h2></div>", "bases"), 403
+    base = CompanyBase.query.get_or_404(request.form.get("base_id", type=int))
+    if not can_access_base(user, base.id):
+        return layout("Acesso negado", "<div class='card'><h2>Base fora da sua permissao.</h2></div>", "bases"), 403
+    company_id = base.company_id
+    if base_can_be_deleted(base.id):
+        audit_event("base_delete", user=user, company_id=company_id, resource_type="company_base", resource_id=base.id, details=base.name)
+        db.session.delete(base)
+    else:
+        base.active = False
+        audit_event("base_sleep_instead_delete", user=user, company_id=company_id, resource_type="company_base", resource_id=base.id, details=base.name)
+    db.session.commit()
+    return redirect(url_for("web_bp.company_bases_page", company_id=request.form.get("company_id", type=int) or company_id))
 
 
 @web_bp.route("/web/colaboradores", methods=["GET", "POST"])
@@ -2802,17 +2901,54 @@ def companies_page():
             audit_event("company_create", user=user, company_id=company.id, resource_type="company", resource_id=company.id, details=name)
             db.session.commit()
             return redirect(url_for("web_bp.guided_implementation_page", company_id=company.id))
-    companies = Company.query.order_by(Company.name).all()
-    rows = "".join(
-        f"<tr><td>{company.id}</td><td>{escape(company.name)}</td><td>{escape(company.email)}</td><td><span class='badge badge-success'>{'Ativa' if company.active else 'Inativa'}</span></td><td><a class='btn small' href='/web/implantacao?company_id={company.id}'>Implantacao</a></td></tr>"
-        for company in companies
-    )
+    companies = Company.query.order_by(Company.active.desc(), Company.name).all()
+    rows = ""
+    for company in companies:
+        status_badge = f"<span class='badge {'badge-success' if company.active else 'badge-danger'}'>{'Ativa' if company.active else 'Adormecida'}</span>"
+        usage_counts = company_dependency_counts(company.id)
+        usage_summary = " | ".join([
+            f"Bases {usage_counts['bases']}",
+            f"Usuarios {usage_counts['colaboradores']}",
+            f"Clientes {usage_counts['clientes']}",
+            f"Rotas {usage_counts['rotas']}",
+            f"Mercadorias {usage_counts['mercadorias']}",
+        ])
+        dependency_summary = ", ".join(f"{label}: {count}" for label, count in usage_counts.items() if count)
+        status_label = "Adormecer" if company.active else "Reativar"
+        actions = f"""
+        <div class='action-stack'>
+            <a class='mini-btn' href='/web/implantacao?company_id={company.id}'>Implantacao</a>
+            <a class='mini-btn' href='/web/bases?company_id={company.id}'>Bases</a>
+            <form method='post' action='/web/empresas/status'>
+                <input type='hidden' name='company_id' value='{company.id}'>
+                <button class='mini-btn {"danger" if company.active else ""}' type='submit'>{status_label}</button>
+            </form>
+        """
+        if company_can_be_deleted(company.id):
+            actions += f"""
+            <form method='post' action='/web/empresas/excluir' onsubmit="return confirm('Excluir esta empresa? Use somente para cadastro criado por engano.');">
+                <input type='hidden' name='company_id' value='{company.id}'>
+                <button class='mini-btn danger' type='submit'>Excluir</button>
+            </form>
+            """
+        else:
+            actions += f"<span class='muted' title='{escape(dependency_summary)}'>Excluir bloqueado</span>"
+        actions += "</div>"
+        rows += f"""
+        <tr>
+            <td>{company.id}</td>
+            <td><strong>{escape(company.name)}</strong><br><span class='muted'>{escape(usage_summary)}</span></td>
+            <td>{escape(company.email)}</td>
+            <td>{status_badge}</td>
+            <td>{actions}</td>
+        </tr>
+        """
     if not rows:
         rows = "<tr><td colspan='5'>Nenhuma empresa cadastrada ainda.</td></tr>"
     body = f"""
     <div class='card'>
         <h2>Cadastrar nova empresa cliente</h2>
-        <p class='muted'>Use esta tela para iniciar um novo cliente SaaS. Depois o checklist guiado ajuda a cadastrar bases, colaboradores, pontos, rotas e relatorios.</p>
+        <p class='muted'>Use esta tela para cadastrar a empresa contratante do SaaS. Depois entre em Bases para cadastrar matriz, filiais e unidades desse cliente.</p>
         {notice}
         <form method='post' class='grid' style='margin-top:12px;'>
             <label>Nome da empresa</label><input name='name' required placeholder='Ex.: Transportadora Cliente'>
@@ -2826,6 +2962,41 @@ def companies_page():
     </div>
     """
     return layout("Empresas", body, "empresas")
+
+
+@web_bp.route("/web/empresas/status", methods=["POST"])
+@web_login_required
+def company_status_page():
+    user = request.web_user
+    if not can_see_master(user):
+        return layout("Acesso negado", "<div class='card'><h2>Acesso administrativo restrito.</h2></div>", "empresas"), 403
+    company = Company.query.get_or_404(request.form.get("company_id", type=int))
+    company.active = not bool(company.active)
+    audit_event("company_status_toggle", user=user, company_id=company.id, resource_type="company", resource_id=company.id, details=f"{company.name}: {'ativa' if company.active else 'adormecida'}")
+    db.session.commit()
+    return redirect(url_for("web_bp.companies_page"))
+
+
+@web_bp.route("/web/empresas/excluir", methods=["POST"])
+@web_login_required
+def company_delete_page():
+    user = request.web_user
+    if not can_see_master(user):
+        return layout("Acesso negado", "<div class='card'><h2>Acesso administrativo restrito.</h2></div>", "empresas"), 403
+    company = Company.query.get_or_404(request.form.get("company_id", type=int))
+    if company_can_be_deleted(company.id):
+        company_id = company.id
+        name = company.name
+        CompanySubscription.query.filter_by(company_id=company_id).delete(synchronize_session=False)
+        AuditLog.query.filter_by(company_id=company_id).update({"company_id": None}, synchronize_session=False)
+        PlatformEvent.query.filter_by(company_id=company_id).update({"company_id": None}, synchronize_session=False)
+        db.session.delete(company)
+        audit_event("company_delete", user=user, resource_type="company", resource_id=company_id, details=name)
+    else:
+        company.active = False
+        audit_event("company_sleep_instead_delete", user=user, company_id=company.id, resource_type="company", resource_id=company.id, details=company.name)
+    db.session.commit()
+    return redirect(url_for("web_bp.companies_page"))
 
 
 @web_bp.route("/web/rotas")
