@@ -37,6 +37,7 @@ clientes.xlsx
 RIS BACKUP/
 backup-*/
 backend/backup-*/
+backend/backups/
 *.bak
 *.bak*
 

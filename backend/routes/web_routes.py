@@ -329,6 +329,107 @@ def audit_event(action, user=None, company_id=None, resource_type=None, resource
         pass
 
 
+BACKUP_MODELS = [
+    ("companies", Company),
+    ("company_bases", CompanyBase),
+    ("users", User),
+    ("clients", Client),
+    ("vehicles", Vehicle),
+    ("manual_locations", ManualLocation),
+    ("logistic_routes", LogisticRoute),
+    ("route_stops", RouteStop),
+    ("route_breaks", RouteBreak),
+    ("route_transfers", RouteTransfer),
+    ("stop_observations", StopObservation),
+    ("stop_proofs", StopProof),
+    ("telemetry_events", TelemetryEvent),
+    ("merchandises", Merchandise),
+    ("merchandise_scans", MerchandiseScan),
+    ("report_snapshots", ReportSnapshot),
+    ("public_contacts", PublicContactRequest),
+    ("public_insights", PublicInsight),
+    ("subscription_plans", SubscriptionPlan),
+    ("company_subscriptions", CompanySubscription),
+    ("audit_logs", AuditLog),
+    ("platform_events", PlatformEvent),
+]
+
+SENSITIVE_BACKUP_FIELDS = {
+    "password",
+    "active_session_id",
+    "active_session_ip",
+    "active_session_user_agent",
+    "terms_accepted_ip",
+    "signature_data",
+}
+
+
+def backup_directory():
+    directory = os.getenv("BACKUP_DIR") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "backups")
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
+
+def backup_file_path(filename):
+    safe_name = secure_filename(filename or "")
+    if not safe_name.startswith("ris_backup_") or not safe_name.endswith(".json"):
+        return None
+    directory = backup_directory()
+    path = os.path.abspath(os.path.join(directory, safe_name))
+    if not path.startswith(os.path.abspath(directory)):
+        return None
+    return path
+
+
+def latest_backup_file():
+    directory = backup_directory()
+    filenames = [
+        name for name in os.listdir(directory)
+        if name.startswith("ris_backup_") and name.endswith(".json")
+    ]
+    if not filenames:
+        return None, None, None
+    filenames.sort(reverse=True)
+    filename = filenames[0]
+    path = os.path.join(directory, filename)
+    return filename, path, datetime.fromtimestamp(os.path.getmtime(path))
+
+
+def serialize_backup_value(value):
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def serialize_backup_row(item):
+    data = {}
+    for column in item.__table__.columns:
+        key = column.name
+        value = getattr(item, key)
+        data[key] = "[protegido]" if key in SENSITIVE_BACKUP_FIELDS else serialize_backup_value(value)
+    return data
+
+
+def generate_logical_backup(user=None):
+    generated_at = datetime.utcnow()
+    payload = {
+        "app": "RIS SaaS",
+        "backup_type": "logical_json",
+        "generated_at": generated_at.isoformat() + "Z",
+        "generated_by": getattr(user, "email", None),
+        "environment": os.getenv("ENV", "development"),
+        "tables": {},
+    }
+    for table_name, model in BACKUP_MODELS:
+        payload["tables"][table_name] = [serialize_backup_row(row) for row in model.query.all()]
+
+    filename = f"ris_backup_{generated_at.strftime('%Y%m%d_%H%M%S')}.json"
+    path = os.path.join(backup_directory(), filename)
+    with open(path, "w", encoding="utf-8") as backup_file:
+        json.dump(payload, backup_file, ensure_ascii=False, indent=2)
+    return filename, path, payload
+
+
 def scoped_query(model, user):
     query = model.query
     if is_driver(user) and model == LogisticRoute:
@@ -1860,6 +1961,9 @@ def saas_production_page():
     using_postgres = database_url.startswith(("postgresql://", "postgres://"))
     env = os.getenv("ENV", "development")
     backup_enabled = os.getenv("BACKUP_ENABLED", "").lower() in ("1", "true", "sim", "yes")
+    backup_filename, backup_path, backup_at = latest_backup_file()
+    backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
+    backup_age_ok = bool(backup_at and backup_at >= datetime.now() - timedelta(hours=36))
     monitoring_enabled = bool(os.getenv("MONITORING_URL", "").strip() or os.getenv("UPTIME_MONITOR_URL", "").strip())
     secret_ready = os.getenv("SECRET_KEY", "") not in ("", "ris_enterprise_2026")
     jwt_ready = os.getenv("JWT_SECRET", "") not in ("", "ris_jwt_enterprise_2026_multiempresa_chave_segura_local")
@@ -1871,7 +1975,7 @@ def saas_production_page():
 
     readiness = [
         ("Banco PostgreSQL em cloud", using_postgres, "Configurar DATABASE_URL com PostgreSQL gerenciado antes da venda em escala."),
-        ("Backup automatico diario", backup_enabled, "Ativar BACKUP_ENABLED=true e rotina diaria no servidor/cloud."),
+        ("Backup automatico diario", backup_enabled and backup_age_ok, "Ativar BACKUP_ENABLED=true e manter backup recente gerado ou backup nativo do Render."),
         ("Ambiente producao separado", env == "production", "Rodar producao com ENV=production e manter ambiente local apenas para testes."),
         ("Logs de erro e auditoria", audit_count >= 0, f"Auditoria criada. Eventos registrados: {audit_count}."),
         ("Monitoramento 24/7", monitoring_enabled, "Configurar UptimeRobot, Better Stack, Grafana Cloud ou health check equivalente em /readyz."),
@@ -1927,6 +2031,11 @@ def saas_production_page():
         """
         for log in AuditLog.query.order_by(AuditLog.created_at.desc()).limit(12).all()
     ) or "<tr><td colspan='5'>Nenhum evento registrado ainda.</td></tr>"
+    backup_status = "Ativo" if backup_enabled else "Pendente"
+    backup_status_class = "badge-success" if backup_enabled else "badge-danger"
+    backup_at_text = backup_at.strftime("%d/%m/%Y %H:%M") if backup_at else "Nenhum backup gerado ainda"
+    backup_size_text = f"{backup_size / 1024:.1f} KB" if backup_size else "-"
+    backup_download = f"<a class='btn btn-secondary' href='/web/backup/baixar?file={escape(backup_filename)}'>Baixar ultimo backup</a>" if backup_filename else ""
 
     body = f"""
     <style>
@@ -1946,7 +2055,12 @@ def saas_production_page():
         .saas-form label {{ display:block; font-size:12px; color:#344054; font-weight:900; margin-bottom:5px; }}
         .saas-form input,.saas-form select {{ width:100%; border:1px solid #d7e0ec; border-radius:8px; padding:9px; }}
         .mono {{ font-family:Consolas, monospace; font-size:13px; background:#f8fafc; border:1px solid #d7e0ec; border-radius:8px; padding:10px; }}
+        .backup-panel {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:12px 0; }}
+        .backup-box {{ border:1px solid #d7e0ec; border-radius:8px; padding:12px; background:#f8fafc; }}
+        .backup-box span {{ display:block; color:#667085; font-size:12px; font-weight:900; text-transform:uppercase; margin-bottom:5px; }}
+        .backup-actions {{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }}
         @media (max-width:1100px) {{ .saas-hero,.saas-form {{ grid-template-columns:1fr; }} }}
+        @media (max-width:800px) {{ .backup-panel {{ grid-template-columns:1fr; }} }}
     </style>
     <section class="saas-hero">
         <div class="saas-progress">
@@ -1957,6 +2071,23 @@ def saas_production_page():
             <div class="mono" style="margin-top:12px;">Health: /healthz<br>Ready: /readyz<br>Ambiente: {escape(env)}<br>Empresas cadastradas: {company_count}</div>
         </div>
         <div class="saas-checks">{checklist_html}</div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+        <h2>Backup e restauracao</h2>
+        <p class="muted">Backup logico da plataforma para contingencia. O arquivo protege campos sensiveis e deve ser baixado para um local seguro. Em producao, mantenha tambem o backup nativo do PostgreSQL no Render.</p>
+        <div class="backup-panel">
+            <div class="backup-box"><span>Status</span><strong class="badge {backup_status_class}">{backup_status}</strong></div>
+            <div class="backup-box"><span>Ultimo backup</span><strong>{backup_at_text}</strong></div>
+            <div class="backup-box"><span>Arquivo</span><strong>{escape(backup_filename or '-')}</strong></div>
+            <div class="backup-box"><span>Tamanho</span><strong>{backup_size_text}</strong></div>
+        </div>
+        <div class="backup-actions">
+            <form method="post" action="/web/backup/gerar">
+                <button class="btn" type="submit">Gerar backup agora</button>
+            </form>
+            {backup_download}
+        </div>
     </section>
 
     <section class="card">
@@ -1990,6 +2121,48 @@ def saas_production_page():
     </section>
     """
     return layout("SaaS / Producao", body, "saas")
+
+
+@web_bp.route("/web/backup/gerar", methods=["POST"])
+@web_login_required
+def generate_backup_page():
+    user = request.web_user
+    if not can_see_master(user):
+        return layout("Acesso negado", "<div class='card'><h2>Area exclusiva master.</h2></div>", "saas"), 403
+
+    filename, path, payload = generate_logical_backup(user)
+    total_rows = sum(len(rows) for rows in payload["tables"].values())
+    db.session.add(PlatformEvent(
+        severity="info",
+        category="backup",
+        title="Backup logico gerado",
+        message=f"Arquivo {filename} gerado com {total_rows} registros exportados.",
+        path=path,
+        user_id=user.id,
+        ip_address=request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", request.remote_addr),
+        user_agent=(request.headers.get("User-Agent") or "")[:255],
+        resolved=True,
+    ))
+    audit_event("backup_generate", user=user, resource_type="backup", resource_id=filename, details=f"Backup logico gerado: {filename}")
+    db.session.commit()
+    return redirect(url_for("web_bp.saas_production_page"))
+
+
+@web_bp.route("/web/backup/baixar")
+@web_login_required
+def download_backup_page():
+    user = request.web_user
+    if not can_see_master(user):
+        return layout("Acesso negado", "<div class='card'><h2>Area exclusiva master.</h2></div>", "saas"), 403
+
+    filename = request.args.get("file", "")
+    path = backup_file_path(filename)
+    if not path or not os.path.exists(path):
+        return layout("Backup nao encontrado", "<div class='card'><h2>Arquivo de backup nao encontrado.</h2></div>", "saas"), 404
+
+    audit_event("backup_download", user=user, resource_type="backup", resource_id=secure_filename(filename), details="Download de backup logico.")
+    db.session.commit()
+    return send_file(path, as_attachment=True, download_name=secure_filename(filename), mimetype="application/json")
 
 
 @web_bp.route("/web/saude-ia")
