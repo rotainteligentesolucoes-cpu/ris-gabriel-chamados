@@ -1960,7 +1960,7 @@ def saas_production_page():
     database_url = os.getenv("DATABASE_URL", "sqlite:///ris.db")
     using_postgres = database_url.startswith(("postgresql://", "postgres://"))
     env = os.getenv("ENV", "development")
-    backup_enabled = os.getenv("BACKUP_ENABLED", "").lower() in ("1", "true", "sim", "yes")
+    backup_enabled = os.getenv("BACKUP_ENABLED", "").strip().lower() in ("1", "true", "sim", "yes")
     backup_filename, backup_path, backup_at = latest_backup_file()
     backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
     backup_age_ok = bool(backup_at and backup_at >= datetime.now() - timedelta(hours=36))
@@ -2031,8 +2031,18 @@ def saas_production_page():
         """
         for log in AuditLog.query.order_by(AuditLog.created_at.desc()).limit(12).all()
     ) or "<tr><td colspan='5'>Nenhum evento registrado ainda.</td></tr>"
-    backup_status = "Ativo" if backup_enabled else "Pendente"
-    backup_status_class = "badge-success" if backup_enabled else "badge-danger"
+    if backup_enabled and backup_age_ok:
+        backup_status = "Automatico ativo"
+        backup_status_class = "badge-success"
+    elif backup_age_ok:
+        backup_status = "Manual gerado"
+        backup_status_class = "badge"
+    elif backup_enabled:
+        backup_status = "Automatico sem backup recente"
+        backup_status_class = "badge-danger"
+    else:
+        backup_status = "Pendente"
+        backup_status_class = "badge-danger"
     backup_at_text = backup_at.strftime("%d/%m/%Y %H:%M") if backup_at else "Nenhum backup gerado ainda"
     backup_size_text = f"{backup_size / 1024:.1f} KB" if backup_size else "-"
     backup_download = f"<a class='btn btn-secondary' href='/web/backup/baixar?file={escape(backup_filename)}'>Baixar ultimo backup</a>" if backup_filename else ""
