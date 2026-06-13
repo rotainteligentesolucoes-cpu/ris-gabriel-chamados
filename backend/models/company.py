@@ -3,6 +3,7 @@
 
 class Company(db.Model):
     __tablename__ = "companies"
+    __table_args__ = (db.Index("ix_companies_active", "active"),)
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
@@ -28,6 +29,10 @@ class Company(db.Model):
 
 class CompanyBase(db.Model):
     __tablename__ = "company_bases"
+    __table_args__ = (
+        db.Index("ix_company_bases_company_active", "company_id", "active"),
+        db.Index("ix_company_bases_parent", "parent_base_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)

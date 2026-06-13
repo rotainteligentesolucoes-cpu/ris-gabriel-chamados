@@ -3,6 +3,10 @@
 
 class Client(db.Model):
     __tablename__ = "clients"
+    __table_args__ = (
+        db.Index("ix_clients_company_base_active", "company_id", "base_id", "active"),
+        db.Index("ix_clients_company_name", "company_id", "name"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)

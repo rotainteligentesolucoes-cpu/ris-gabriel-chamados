@@ -1,6 +1,6 @@
 ﻿from flask import Blueprint, jsonify, request
 
-from auth.security import login_required, resolve_company_id, scoped_query
+from auth.security import can_access_base_id, login_required, resolve_base_id, resolve_company_id, role_level, scoped_query
 from database.database import db
 from models.client import Client
 
@@ -24,9 +24,16 @@ def create_client():
         return jsonify({"error": "Campos obrigatorios", "fields": missing}), 400
     if not company_id:
         return jsonify({"error": "company_id e obrigatorio"}), 400
+    requested_base_id = data.get("base_id")
+    base_id = resolve_base_id(data, company_id)
+    if requested_base_id not in (None, "") and not can_access_base_id(request.current_user, requested_base_id, company_id):
+        return jsonify({"error": "Base fora da permissao do usuario"}), 403
+    if role_level(request.current_user) < 3 and not request.current_user.is_master and not base_id:
+        return jsonify({"error": "Usuario sem base atribuida"}), 403
 
     client = Client(
         company_id=company_id,
+        base_id=base_id,
         name=data["name"],
         email=data.get("email"),
         latitude=float(data["latitude"]),

@@ -34,6 +34,7 @@ class SubscriptionPlan(db.Model):
 
 class CompanySubscription(db.Model):
     __tablename__ = "company_subscriptions"
+    __table_args__ = (db.Index("ix_company_subscriptions_company_status", "company_id", "status"),)
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -68,6 +69,10 @@ class CompanySubscription(db.Model):
 
 class AuditLog(db.Model):
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        db.Index("ix_audit_logs_company_created", "company_id", "created_at"),
+        db.Index("ix_audit_logs_user_created", "user_id", "created_at"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=True)
@@ -99,6 +104,10 @@ class AuditLog(db.Model):
 
 class PlatformEvent(db.Model):
     __tablename__ = "platform_events"
+    __table_args__ = (
+        db.Index("ix_platform_events_severity_created", "severity", "created_at"),
+        db.Index("ix_platform_events_resolved_created", "resolved", "created_at"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     severity = db.Column(db.String(30), default="info", nullable=False)

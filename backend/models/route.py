@@ -3,6 +3,12 @@
 
 class LogisticRoute(db.Model):
     __tablename__ = "logistic_routes"
+    __table_args__ = (
+        db.Index("ix_routes_company_date", "company_id", "planned_date"),
+        db.Index("ix_routes_company_base_date", "company_id", "base_id", "planned_date"),
+        db.Index("ix_routes_driver_date", "driver_user_id", "planned_date"),
+        db.Index("ix_routes_company_status", "company_id", "status"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -49,6 +55,11 @@ class LogisticRoute(db.Model):
 
 class RouteStop(db.Model):
     __tablename__ = "route_stops"
+    __table_args__ = (
+        db.Index("ix_route_stops_route_sequence", "route_id", "sequence"),
+        db.Index("ix_route_stops_route_status", "route_id", "status"),
+        db.Index("ix_route_stops_client", "client_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     route_id = db.Column(db.Integer, db.ForeignKey("logistic_routes.id"), nullable=False)

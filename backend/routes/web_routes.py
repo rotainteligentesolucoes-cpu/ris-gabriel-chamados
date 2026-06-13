@@ -15,11 +15,10 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 import folium
 import requests
-import urllib3
+from sqlalchemy import false
 from sqlalchemy import or_
 
 load_dotenv()
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from auth.security import clear_login_failures, login_block_seconds, register_login_failure, start_user_session
 from database.database import db
@@ -30,6 +29,7 @@ from models.route import LogisticRoute, RouteStop
 from models.saas import AuditLog, CompanySubscription, PlatformEvent, SubscriptionPlan
 from models.user import User
 from models.vehicle import Vehicle
+from storage.files import save_bytes, save_upload, send_stored_file
 
 web_bp = Blueprint("web_bp", __name__)
 
@@ -427,6 +427,8 @@ def generate_logical_backup(user=None):
     path = os.path.join(backup_directory(), filename)
     with open(path, "w", encoding="utf-8") as backup_file:
         json.dump(payload, backup_file, ensure_ascii=False, indent=2)
+    if os.getenv("STORAGE_BACKEND", "local").strip().lower() == "s3":
+        save_bytes(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"), "backups", filename, "application/json")
     return filename, path, payload
 
 
@@ -444,9 +446,21 @@ def scoped_query(model, user):
             return query
         return query
     query = query.filter_by(company_id=user.company_id)
-    if getattr(user, "base_id", None) and hasattr(model, "base_id") and role_level(user) < 3:
+    if hasattr(model, "base_id") and role_level(user) < 3:
+        if not getattr(user, "base_id", None):
+            return query.filter(false())
         query = query.filter_by(base_id=user.base_id)
     return query
+
+
+def scoped_route_record_query(model, user, route_field="route_id"):
+    """Scope records that inherit company/base access from a linked route."""
+    query = model.query
+    route_column = getattr(model, route_field, None)
+    if route_column is None:
+        return query.filter(false())
+    allowed_routes = scoped_query(LogisticRoute, user).with_entities(LogisticRoute.id)
+    return query.filter(route_column.in_(allowed_routes))
 
 
 def can_access_company(user, company_id):
@@ -457,7 +471,7 @@ def can_access_company(user, company_id):
 
 def can_access_base(user, base_id):
     if not base_id:
-        return True
+        return bool(is_master_user(user) or role_level(user) >= 3)
     base = CompanyBase.query.get(base_id)
     if not base:
         return False
@@ -467,7 +481,7 @@ def can_access_base(user, base_id):
         return False
     if role_level(user) >= 3:
         return True
-    return not getattr(user, "base_id", None) or same_id(user.base_id, base_id)
+    return bool(getattr(user, "base_id", None) and same_id(user.base_id, base_id))
 
 
 def company_dependency_counts(company_id):
@@ -523,7 +537,7 @@ def infer_base_id_from_clients(clients, user=None):
 def can_access_route(user, route):
     if is_driver(user):
         return route.driver_user_id == user.id
-    return can_access_company(user, route.company_id)
+    return can_access_company(user, route.company_id) and can_access_base(user, route.base_id)
 
 
 def distancia_reta_km(points):
@@ -557,7 +571,6 @@ def percurso_pelas_ruas(points):
                 json={"coordinates": coordinates},
                 headers={"Authorization": ORS_API_KEY, "Content-Type": "application/json"},
                 timeout=20,
-                verify=False,
             )
             data = response.json()
             if "features" in data:
@@ -3359,7 +3372,7 @@ def rename_route_page():
     if not can_see_admin(user):
         return layout("Acesso negado", "<div class='card'><h2>Acesso disponivel a partir da gerencia.</h2></div>", "rotas"), 403
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Rota de outra empresa.</h2></div>", "rotas"), 403
     name = request.form.get("name", "").strip()
     if name:
@@ -3445,7 +3458,7 @@ def delete_route_page():
     if is_driver(user):
         return redirect(url_for("web_bp.driver_page"))
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Rota de outra empresa.</h2></div>", "rotas"), 403
 
     from database.database import db
@@ -4036,10 +4049,11 @@ def merchandises_page():
             ]).lower()
         ]
 
-    total = Merchandise.query.filter_by(company_id=selected_company_id).count()
-    pending = Merchandise.query.filter_by(company_id=selected_company_id, status="pendente").count()
-    delivered = Merchandise.query.filter_by(company_id=selected_company_id, status="entregue").count()
-    divergent = Merchandise.query.filter_by(company_id=selected_company_id, status="divergente").count()
+    summary_query = scoped_query(Merchandise, user).filter_by(company_id=selected_company_id)
+    total = summary_query.count()
+    pending = summary_query.filter_by(status="pendente").count()
+    delivered = summary_query.filter_by(status="entregue").count()
+    divergent = summary_query.filter_by(status="divergente").count()
 
     route_options = merchandise_route_options(user, route_filter)
     route_form_options = merchandise_route_options(user)
@@ -4069,7 +4083,7 @@ def merchandises_page():
     if not rows:
         rows = "<tr><td colspan='6'>Nenhuma mercadoria encontrada.</td></tr>"
 
-    recent_scans = MerchandiseScan.query.filter_by(company_id=selected_company_id).order_by(MerchandiseScan.created_at.desc(), MerchandiseScan.id.desc()).limit(80).all()
+    recent_scans = scoped_route_record_query(MerchandiseScan, user).filter_by(company_id=selected_company_id).order_by(MerchandiseScan.created_at.desc(), MerchandiseScan.id.desc()).limit(80).all()
     scan_rows = ""
     for scan in recent_scans:
         created = scan.created_at.strftime("%d/%m/%Y %H:%M") if scan.created_at else "-"
@@ -4175,10 +4189,12 @@ def merchandise_scan_file_page(filename):
     scan = MerchandiseScan.query.filter_by(photo_filename=safe_name).first_or_404()
     if not can_access_company(user, scan.company_id):
         return layout("Acesso negado", "<div class='card'><h2>Arquivo de outra empresa.</h2></div>", "mercadorias"), 403
-    path = os.path.join(proof_upload_dir(), safe_name)
-    if not os.path.exists(path):
+    if not scan.route or not can_access_route(user, scan.route):
+        return layout("Acesso negado", "<div class='card'><h2>Arquivo fora da sua base ou rota.</h2></div>", "mercadorias"), 403
+    try:
+        return send_stored_file("proofs", safe_name)
+    except FileNotFoundError:
         return layout("Arquivo nao encontrado", "<div class='card'><h2>Arquivo da conferencia nao localizado.</h2></div>", "mercadorias"), 404
-    return send_file(path)
 
 
 @web_bp.route("/web/mercadorias/modelo-importacao.xlsx")
@@ -4483,7 +4499,7 @@ def merchandise_loading_page():
 def merchandise_loading_export_page():
     user = request.web_user
     route = LogisticRoute.query.get_or_404(request.args.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Rota de outra empresa.</h2></div>", "mercadorias"), 403
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
@@ -4537,7 +4553,7 @@ def merchandise_loading_export_page():
 def merchandise_loading_report_page():
     user = request.web_user
     route = LogisticRoute.query.get_or_404(request.args.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Rota de outra empresa.</h2></div>", "mercadorias"), 403
     items = route_loading_items(route)
     summary = loading_summary(items, route)
@@ -4658,7 +4674,7 @@ def telemetry_page():
     routes = scoped_query(LogisticRoute, user).order_by(LogisticRoute.name).all()
     selected_route_id = request.args.get("route_id", type=int)
     selected_route = LogisticRoute.query.get(selected_route_id) if selected_route_id else (routes[0] if routes else None)
-    if selected_route and not can_access_company(user, selected_route.company_id):
+    if selected_route and not can_access_route(user, selected_route):
         selected_route = routes[0] if routes else None
     route_options = "".join(f"<option value='{route.id}' {'selected' if selected_route and route.id == selected_route.id else ''}>{route.name} | {route.vehicle.name if route.vehicle else '-'}</option>" for route in routes)
     events_query = TelemetryEvent.query.filter_by(route_id=selected_route.id) if selected_route else TelemetryEvent.query.filter(False)
@@ -7626,7 +7642,7 @@ def operational_page():
     selected_route = None
     if selected_route_id:
         selected_route = LogisticRoute.query.get(selected_route_id)
-        if selected_route and not can_access_company(user, selected_route.company_id):
+        if selected_route and not can_access_route(user, selected_route):
             selected_route = None
     selected_day = operational_day_from_routes(all_routes, request.args.get("data"), selected_route)
     day_routes = [route for route in all_routes if route.planned_date == selected_day]
@@ -8367,7 +8383,7 @@ def transfer_stop_page():
     stop = RouteStop.query.get_or_404(request.form.get("route_stop_id", type=int))
     from_route = LogisticRoute.query.get_or_404(request.form.get("from_route_id", type=int))
     to_route = LogisticRoute.query.get_or_404(request.form.get("to_route_id", type=int))
-    if not can_access_company(user, from_route.company_id) or not can_access_company(user, to_route.company_id) or from_route.company_id != to_route.company_id:
+    if not can_access_route(user, from_route) or not can_access_route(user, to_route) or from_route.company_id != to_route.company_id:
         return layout("Acesso negado", "<div class='card'><h2>Transferencia invalida para outra empresa.</h2></div>", "operacao"), 403
     if stop.route_id != from_route.id or from_route.id == to_route.id:
         return redirect(url_for("web_bp.operational_page", route_id=from_route.id))
@@ -8389,7 +8405,7 @@ def create_observation_page():
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
     if is_driver(user) and route.driver_user_id != user.id:
         return layout("Acesso negado", "<div class='card'><h2>Esta rota nao pertence ao seu login.</h2></div>", "motorista"), 403
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Rota de outra empresa.</h2></div>", "operacao"), 403
     latitude = request.form.get("latitude")
     longitude = request.form.get("longitude")
@@ -8444,19 +8460,20 @@ def reports_page():
         first_company = Company.query.order_by(Company.id).first()
         company_id = first_company.id if first_company else None
     if request.method == "POST" and company_id and can_see_admin(user):
-        routes = LogisticRoute.query.filter_by(company_id=company_id).all()
-        observations = StopObservation.query.filter_by(company_id=company_id).all()
-        transfers = RouteTransfer.query.filter_by(company_id=company_id).all()
+        routes = scoped_query(LogisticRoute, user).filter_by(company_id=company_id).all()
+        route_ids = [route.id for route in routes]
+        observations = StopObservation.query.filter(StopObservation.route_id.in_(route_ids)).all() if route_ids else []
+        transfers = RouteTransfer.query.filter(
+            (RouteTransfer.from_route_id.in_(route_ids)) | (RouteTransfer.to_route_id.in_(route_ids))
+        ).all() if route_ids else []
         summary = f"Rotas: {len(routes)} | Observacoes: {len(observations)} | Transferencias: {len(transfers)} | Gerado automaticamente."
         db.session.add(ReportSnapshot(company_id=company_id, title="Relatorio operacional", report_type="operacional_90_dias", summary=summary, created_by_user_id=user.id))
         db.session.commit()
         return redirect(url_for("web_bp.reports_page"))
     since = datetime.now() - timedelta(days=90)
-    route_query = LogisticRoute.query
+    route_query = scoped_query(LogisticRoute, user)
     if company_id:
         route_query = route_query.filter_by(company_id=company_id)
-    if not user.is_master:
-        route_query = route_query.filter_by(company_id=user.company_id)
     routes = route_query.order_by(LogisticRoute.created_at.desc(), LogisticRoute.id.desc()).all()
     selected_route_id = requested_route_id
     selected_route = next((route for route in routes if route.id == selected_route_id), None) if selected_route_id else (routes[0] if routes else None)
@@ -9268,10 +9285,12 @@ def proof_file_page(filename):
         return layout("Acesso negado", "<div class='card'><h2>Comprovante de outro motorista.</h2></div>", "motorista"), 403
     if not can_access_company(user, proof.company_id):
         return layout("Acesso negado", "<div class='card'><h2>Comprovante de outra empresa.</h2></div>", "operacao"), 403
-    path = os.path.join(proof_upload_dir(), safe_name)
-    if not os.path.exists(path):
+    if not proof.route or not can_access_route(user, proof.route):
+        return layout("Acesso negado", "<div class='card'><h2>Comprovante fora da sua base ou rota.</h2></div>", "operacao"), 403
+    try:
+        return send_stored_file("proofs", safe_name)
+    except FileNotFoundError:
         return layout("Arquivo nao encontrado", "<div class='card'><h2>Arquivo do comprovante nao localizado.</h2></div>", "operacao"), 404
-    return send_file(path)
 
 
 @web_bp.route("/web/fiscal")
@@ -9298,13 +9317,13 @@ def fiscal_page():
         f"<option value='{company.id}' {'selected' if company.id == selected_company_id else ''}>{escape(company.name)}</option>"
         for company in companies if company
     )
-    route_list = LogisticRoute.query.filter_by(company_id=selected_company_id).order_by(LogisticRoute.planned_date.desc(), LogisticRoute.id.desc()).limit(300).all()
+    route_list = scoped_query(LogisticRoute, user).filter_by(company_id=selected_company_id).order_by(LogisticRoute.planned_date.desc(), LogisticRoute.id.desc()).limit(300).all()
     route_options = "<option value=''>Todas as rotas</option>" + "".join(
         f"<option value='{route.id}' {'selected' if selected_route_id == route.id else ''}>{escape(route_display_name(route))} | {display_date(route.planned_date)} | {escape(route_free_label(route))}</option>"
         for route in route_list
     )
 
-    query = StopProof.query.filter_by(company_id=selected_company_id)
+    query = scoped_route_record_query(StopProof, user).filter_by(company_id=selected_company_id)
     if selected_route_id:
         query = query.filter_by(route_id=selected_route_id)
     if selected_stop_id:
@@ -9467,7 +9486,7 @@ def driver_proof_page():
         if upload_error:
             return layout("Comprovante", f"<div class='card'><h2>{escape(upload_error)}</h2><a class='btn' href='/motorista'>Voltar</a></div>", "motorista"), 400
         photo_filename = f"{uuid4().hex}_{original}"
-        photo.save(os.path.join(proof_upload_dir(), photo_filename))
+        save_upload(photo, "proofs", photo_filename)
 
     invoice_file_filename = None
     invoice_file = request.files.get("invoice_file")
@@ -9476,7 +9495,7 @@ def driver_proof_page():
         if upload_error:
             return layout("Comprovante", f"<div class='card'><h2>{escape(upload_error)}</h2><a class='btn' href='/motorista'>Voltar</a></div>", "motorista"), 400
         invoice_file_filename = f"{uuid4().hex}_{original}"
-        invoice_file.save(os.path.join(proof_upload_dir(), invoice_file_filename))
+        save_upload(invoice_file, "proofs", invoice_file_filename)
 
     latitude = parse_coord("latitude")
     longitude = parse_coord("longitude")
@@ -9581,7 +9600,7 @@ def driver_merchandise_scan_page():
         if upload_error:
             return layout("Conferencia de mercadoria", f"<div class='card'><h2>{escape(upload_error)}</h2><a class='btn' href='/motorista'>Voltar</a></div>", "motorista"), 400
         photo_filename = f"{uuid4().hex}_{original}"
-        photo.save(os.path.join(proof_upload_dir(), photo_filename))
+        save_upload(photo, "proofs", photo_filename)
 
     merchandise = merchandise_match_query(route.company_id, code).first()
     latitude = parse_coord("latitude")
@@ -9762,7 +9781,7 @@ def update_route_start_time_page():
     if is_driver(user):
         return layout("Acesso negado", "<div class='card'><h2>Inicio da rota e editado pela operacao.</h2></div>", "motorista"), 403
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
     raw_time = request.form.get("start_time", "").strip()
     hour, minute = parse_hhmm(raw_time, route_start_time(route))
@@ -9788,7 +9807,7 @@ def update_route_status_page():
     if is_driver(user):
         return layout("Acesso negado", "<div class='card'><h2>Inicio e finalizacao da rota sao controlados pela operacao nesta tela.</h2></div>", "motorista"), 403
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
 
     action = request.form.get("action")
@@ -9829,7 +9848,7 @@ def update_stop_service_time_page():
         return layout("Acesso negado", "<div class='card'><h2>Tempo previsto de atendimento e editado pela operacao.</h2></div>", "motorista"), 403
     stop = RouteStop.query.get_or_404(request.form.get("route_stop_id", type=int))
     route = LogisticRoute.query.get_or_404(stop.route_id)
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
 
     minutes = request.form.get("service_minutes", type=int) or DEFAULT_SERVICE_MINUTES
@@ -9862,7 +9881,7 @@ def update_stop_service_description_page():
         return layout("Acesso negado", "<div class='card'><h2>Servico previsto da parada e editado pela operacao.</h2></div>", "motorista"), 403
     stop = RouteStop.query.get_or_404(request.form.get("route_stop_id", type=int))
     route = LogisticRoute.query.get_or_404(stop.route_id)
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
 
     old_description = stop_service_description(stop)
@@ -9895,7 +9914,7 @@ def add_service_stop_page():
     if is_driver(user):
         return layout("Acesso negado", "<div class='card'><h2>Insercao de parada e feita pela operacao.</h2></div>", "motorista"), 403
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
     client = Client.query.get_or_404(request.form.get("client_id", type=int))
     if client.company_id != route.company_id or not client.active:
@@ -9948,7 +9967,7 @@ def reorder_stop_page():
     if is_driver(user):
         if route.driver_user_id != user.id:
             return layout("Acesso negado", "<div class='card'><h2>Esta parada nao pertence a sua rota.</h2></div>", "motorista"), 403
-    elif not can_access_company(user, route.company_id):
+    elif not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
 
     direction = request.form.get("direction")
@@ -9975,7 +9994,7 @@ def ai_resequence_route_page():
     if is_driver(user):
         if route.driver_user_id != user.id:
             return layout("Acesso negado", "<div class='card'><h2>Esta rota nao pertence ao seu login.</h2></div>", "motorista"), 403
-    elif not can_access_company(user, route.company_id):
+    elif not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
     ai_resequence_route(route, user)
     if request.form.get("return_to") == "driver" or is_driver(user):
@@ -9990,7 +10009,7 @@ def route_breaks_page():
     if is_driver(user):
         return layout("Acesso negado", "<div class='card'><h2>Intervalos sao editados pela equipe operacional.</h2></div>", "motorista"), 403
     route = LogisticRoute.query.get_or_404(request.form.get("route_id", type=int))
-    if not can_access_company(user, route.company_id):
+    if not can_access_route(user, route):
         return layout("Acesso negado", "<div class='card'><h2>Esta rota pertence a outra empresa.</h2></div>", "operacao"), 403
 
     from database.database import db
@@ -10124,8 +10143,8 @@ def first_access_page():
             else:
                 address_filename = f"{uuid4().hex}_{address_original}"
                 document_filename = f"{uuid4().hex}_{document_original}"
-                address_file.save(os.path.join(onboarding_upload_dir(), address_filename))
-                document_file.save(os.path.join(onboarding_upload_dir(), document_filename))
+                save_upload(address_file, "onboarding", address_filename)
+                save_upload(document_file, "onboarding", document_filename)
                 from database.database import db
                 db.session.add(PublicContactRequest(
                     request_type="primeiro_acesso",
@@ -10294,10 +10313,10 @@ def contact_request_file_page(filename):
     ).first()
     if not exists:
         return layout("Arquivo nao encontrado", "<div class='card'><h2>Anexo nao localizado na solicitacao.</h2></div>", "contatos"), 404
-    path = os.path.join(onboarding_upload_dir(), safe_name)
-    if not os.path.exists(path):
+    try:
+        return send_stored_file("onboarding", safe_name)
+    except FileNotFoundError:
         return layout("Arquivo nao encontrado", "<div class='card'><h2>Arquivo fisico nao localizado.</h2></div>", "contatos"), 404
-    return send_file(path)
 
 
 @web_bp.route("/web/insights-publicos", methods=["GET", "POST"])

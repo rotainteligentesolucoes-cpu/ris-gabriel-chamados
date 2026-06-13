@@ -3,6 +3,9 @@
 
 class Vehicle(db.Model):
     __tablename__ = "vehicles"
+    __table_args__ = (
+        db.Index("ix_vehicles_company_base_active", "company_id", "base_id", "active"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)

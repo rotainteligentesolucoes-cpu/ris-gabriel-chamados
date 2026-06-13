@@ -6,8 +6,38 @@ from uuid import uuid4
 
 import jwt
 from flask import jsonify, request
+from sqlalchemy import false
 
 from models.user import User
+from models.company import CompanyBase
+
+
+ROLE_LEVELS = {
+    "driver": 0, "motorista": 0,
+    "operator": 1, "operador": 1, "operational": 1, "operacional": 1,
+    "manager": 2, "gerente": 2, "admin": 2,
+    "ceo": 3, "owner": 3, "proprietario": 3,
+    "master": 4,
+}
+
+
+def role_level(user):
+    return ROLE_LEVELS.get((getattr(user, "role", "") or "").strip().lower(), 0)
+
+
+def can_access_base_id(user, base_id, company_id=None):
+    if not base_id:
+        return bool(user.is_master or role_level(user) >= 3)
+    base = CompanyBase.query.get(base_id)
+    if not base:
+        return False
+    if user.is_master:
+        return not company_id or base.company_id == company_id
+    if base.company_id != user.company_id or (company_id and base.company_id != company_id):
+        return False
+    if role_level(user) >= 3:
+        return True
+    return bool(user.base_id and user.base_id == base.id)
 
 
 def _jwt_secret():
@@ -141,9 +171,20 @@ def scoped_query(model):
     if user.is_master:
         company_id = request.args.get("company_id", type=int)
         if company_id:
-            return query.filter_by(company_id=company_id)
+            query = query.filter_by(company_id=company_id)
+            base_id = request.args.get("base_id", type=int)
+            if base_id and hasattr(model, "base_id"):
+                query = query.filter_by(base_id=base_id)
+            return query
         return query
-    return query.filter_by(company_id=user.company_id)
+    query = query.filter_by(company_id=user.company_id)
+    if role_level(user) == 0 and getattr(model, "__tablename__", None) == "logistic_routes":
+        return query.filter_by(driver_user_id=user.id)
+    if hasattr(model, "base_id") and role_level(user) < 3:
+        if not user.base_id:
+            return query.filter(false())
+        query = query.filter_by(base_id=user.base_id)
+    return query
 
 
 def resolve_company_id(data):
@@ -151,4 +192,18 @@ def resolve_company_id(data):
     if user.is_master:
         return data.get("company_id")
     return user.company_id
+
+
+def resolve_base_id(data, company_id):
+    user = request.current_user
+    requested = data.get("base_id")
+    if role_level(user) < 3 and not user.is_master and user.base_id:
+        requested = user.base_id
+    if requested in (None, ""):
+        return None
+    try:
+        requested = int(requested)
+    except (TypeError, ValueError):
+        return None
+    return requested if can_access_base_id(user, requested, company_id) else None
 

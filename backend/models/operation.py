@@ -3,6 +3,7 @@
 
 class ManualLocation(db.Model):
     __tablename__ = "manual_locations"
+    __table_args__ = (db.Index("ix_manual_locations_company_base_active", "company_id", "base_id", "active"),)
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -34,6 +35,7 @@ class ManualLocation(db.Model):
 
 class StopObservation(db.Model):
     __tablename__ = "stop_observations"
+    __table_args__ = (db.Index("ix_stop_observations_route_created", "route_id", "created_at"),)
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -67,6 +69,7 @@ class StopObservation(db.Model):
 
 class RouteTransfer(db.Model):
     __tablename__ = "route_transfers"
+    __table_args__ = (db.Index("ix_route_transfers_company_created", "company_id", "created_at"),)
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -86,6 +89,7 @@ class RouteTransfer(db.Model):
 
 class RouteBreak(db.Model):
     __tablename__ = "route_breaks"
+    __table_args__ = (db.Index("ix_route_breaks_route_active", "route_id", "active"),)
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -108,6 +112,7 @@ class RouteBreak(db.Model):
 
 class ReportSnapshot(db.Model):
     __tablename__ = "report_snapshots"
+    __table_args__ = (db.Index("ix_report_snapshots_company_created", "company_id", "created_at"),)
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -133,6 +138,11 @@ class ReportSnapshot(db.Model):
 
 class TelemetryEvent(db.Model):
     __tablename__ = "telemetry_events"
+    __table_args__ = (
+        db.Index("ix_telemetry_route_captured", "route_id", "captured_at"),
+        db.Index("ix_telemetry_company_captured", "company_id", "captured_at"),
+        db.Index("ix_telemetry_vehicle_captured", "vehicle_id", "captured_at"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -176,6 +186,10 @@ class TelemetryEvent(db.Model):
 
 class StopProof(db.Model):
     __tablename__ = "stop_proofs"
+    __table_args__ = (
+        db.Index("ix_stop_proofs_route_captured", "route_id", "captured_at"),
+        db.Index("ix_stop_proofs_stop", "route_stop_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -226,6 +240,11 @@ class StopProof(db.Model):
 
 class Merchandise(db.Model):
     __tablename__ = "merchandises"
+    __table_args__ = (
+        db.Index("ix_merchandises_company_base_status", "company_id", "base_id", "status"),
+        db.Index("ix_merchandises_company_barcode", "company_id", "barcode"),
+        db.Index("ix_merchandises_route_stop", "route_id", "route_stop_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -278,6 +297,11 @@ class Merchandise(db.Model):
 
 class MerchandiseScan(db.Model):
     __tablename__ = "merchandise_scans"
+    __table_args__ = (
+        db.Index("ix_merchandise_scans_route_created", "route_id", "created_at"),
+        db.Index("ix_merchandise_scans_company_code", "company_id", "scanned_code"),
+        db.Index("ix_merchandise_scans_merchandise", "merchandise_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
@@ -303,6 +327,7 @@ class MerchandiseScan(db.Model):
 
 class PublicContactRequest(db.Model):
     __tablename__ = "public_contact_requests"
+    __table_args__ = (db.Index("ix_public_contacts_type_created", "request_type", "created_at"),)
 
     id = db.Column(db.Integer, primary_key=True)
     request_type = db.Column(db.String(40), default="contato", nullable=True)

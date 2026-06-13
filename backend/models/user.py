@@ -3,6 +3,10 @@
 
 class User(db.Model):
     __tablename__ = "users"
+    __table_args__ = (
+        db.Index("ix_users_company_base_role", "company_id", "base_id", "role"),
+        db.Index("ix_users_company_active", "company_id", "active"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=True)

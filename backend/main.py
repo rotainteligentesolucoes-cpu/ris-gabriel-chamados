@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_migrate import Migrate, upgrade
 from dotenv import load_dotenv
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.security import generate_password_hash
@@ -15,6 +16,7 @@ from routes.route_routes import route_bp
 from routes.user_routes import user_bp
 from routes.vehicle_routes import vehicle_bp
 from routes.web_routes import web_bp
+from security.csrf import init_csrf
 
 load_dotenv()
 
@@ -60,7 +62,9 @@ def allowed_cors_origins():
     ]
 
 db.init_app(app)
+migrate = Migrate(app, db, directory=os.path.join(os.path.dirname(__file__), "migrations"))
 CORS(app, resources={r"/*": {"origins": allowed_cors_origins()}}, supports_credentials=True)
+init_csrf(app)
 
 
 @app.after_request
@@ -551,6 +555,8 @@ with app.app_context():
     db.create_all()
     ensure_sqlite_schema()
     ensure_postgres_schema()
+    if os.getenv("RUN_MIGRATIONS", "true").strip().lower() in ("1", "true", "yes", "sim"):
+        upgrade(directory=os.path.join(os.path.dirname(__file__), "migrations"))
     seed_master_user()
     seed_public_insights()
     if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":

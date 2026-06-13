@@ -1,6 +1,7 @@
 Flask
 Flask-Cors
 Flask-SQLAlchemy
+Flask-Migrate
 Flask-SocketIO
 eventlet
 SQLAlchemy
@@ -20,3 +21,4 @@ gunicorn
 PyJWT
 bcrypt
 authlib
+boto3
