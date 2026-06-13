@@ -562,6 +562,10 @@ with app.app_context():
     if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
         seed_demo_data()
 
+from services.backup_scheduler import start_backup_scheduler
+
+start_backup_scheduler(app)
+
 
 @app.route("/api/status")
 def home():

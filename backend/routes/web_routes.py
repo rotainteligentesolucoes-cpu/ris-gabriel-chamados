@@ -1976,40 +1976,23 @@ def saas_production_page():
     backup_enabled = os.getenv("BACKUP_ENABLED", "").strip().lower() in ("1", "true", "sim", "yes")
     backup_filename, backup_path, backup_at = latest_backup_file()
     backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
-    backup_age_ok = bool(backup_at and backup_at >= datetime.now() - timedelta(hours=36))
-    if backup_enabled and not backup_age_ok:
-        try:
-            backup_filename, backup_path, payload = generate_logical_backup(user)
-            backup_at = datetime.now()
+    automatic_backup = (
+        PlatformEvent.query
+        .filter_by(category="backup", title="Backup automatico diario concluido", resolved=True)
+        .order_by(PlatformEvent.created_at.desc())
+        .first()
+    )
+    automatic_backup_at = automatic_backup.created_at if automatic_backup else None
+    automatic_backup_ok = bool(
+        automatic_backup_at and automatic_backup_at >= datetime.utcnow() - timedelta(hours=36)
+    )
+    if automatic_backup and automatic_backup.path:
+        automatic_filename = secure_filename(os.path.basename(automatic_backup.path))
+        if automatic_filename and (not backup_at or automatic_backup_at >= backup_at):
+            backup_filename = automatic_filename
+            backup_path = backup_file_path(automatic_filename)
+            backup_at = automatic_backup_at
             backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
-            backup_age_ok = True
-            total_rows = sum(len(rows) for rows in payload["tables"].values())
-            db.session.add(PlatformEvent(
-                severity="info",
-                category="backup",
-                title="Backup automatico gerado",
-                message=f"Rotina diaria gerou {backup_filename} com {total_rows} registros exportados.",
-                path=backup_path,
-                user_id=user.id,
-                ip_address=request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", request.remote_addr),
-                user_agent=(request.headers.get("User-Agent") or "")[:255],
-                resolved=True,
-            ))
-            audit_event("backup_auto_generate", user=user, resource_type="backup", resource_id=backup_filename, details="Backup automatico por acesso ao painel SaaS.")
-            db.session.commit()
-        except Exception as exc:
-            db.session.rollback()
-            db.session.add(PlatformEvent(
-                severity="warning",
-                category="backup",
-                title="Falha ao gerar backup automatico",
-                message=str(exc)[:500],
-                user_id=user.id,
-                ip_address=request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", request.remote_addr),
-                user_agent=(request.headers.get("User-Agent") or "")[:255],
-                resolved=False,
-            ))
-            db.session.commit()
     monitoring_enabled = bool(os.getenv("MONITORING_URL", "").strip() or os.getenv("UPTIME_MONITOR_URL", "").strip())
     secret_ready = os.getenv("SECRET_KEY", "") not in ("", "ris_enterprise_2026")
     jwt_ready = os.getenv("JWT_SECRET", "") not in ("", "ris_jwt_enterprise_2026_multiempresa_chave_segura_local")
@@ -2021,7 +2004,7 @@ def saas_production_page():
 
     readiness = [
         ("Banco PostgreSQL em cloud", using_postgres, "Configurar DATABASE_URL com PostgreSQL gerenciado antes da venda em escala."),
-        ("Backup automatico diario", backup_enabled and backup_age_ok, "BACKUP_ENABLED=true com rotina diaria ativa no painel; manter tambem backup nativo do Render em producao."),
+        ("Backup automatico diario", backup_enabled and automatic_backup_ok, "BACKUP_ENABLED=true com rotina interna diaria e ultimo backup recente; manter tambem backup nativo do Render em producao."),
         ("Ambiente producao separado", env == "production", "Rodar producao com ENV=production e manter ambiente local apenas para testes."),
         ("Logs de erro e auditoria", audit_count >= 0, f"Auditoria criada. Eventos registrados: {audit_count}."),
         ("Monitoramento 24/7", monitoring_enabled, "Configurar UptimeRobot, Better Stack, Grafana Cloud ou health check equivalente em /readyz."),
@@ -2077,10 +2060,10 @@ def saas_production_page():
         """
         for log in AuditLog.query.order_by(AuditLog.created_at.desc()).limit(12).all()
     ) or "<tr><td colspan='5'>Nenhum evento registrado ainda.</td></tr>"
-    if backup_enabled and backup_age_ok:
+    if backup_enabled and automatic_backup_ok:
         backup_status = "Automatico ativo"
         backup_status_class = "badge-success"
-    elif backup_age_ok:
+    elif backup_at:
         backup_status = "Manual gerado"
         backup_status_class = "badge"
     elif backup_enabled:
@@ -2213,11 +2196,14 @@ def download_backup_page():
 
     filename = request.args.get("file", "")
     path = backup_file_path(filename)
-    if not path or not os.path.exists(path):
+    storage_backend = os.getenv("STORAGE_BACKEND", "local").strip().lower()
+    if (not path or not os.path.exists(path)) and storage_backend != "s3":
         return layout("Backup nao encontrado", "<div class='card'><h2>Arquivo de backup nao encontrado.</h2></div>", "saas"), 404
 
     audit_event("backup_download", user=user, resource_type="backup", resource_id=secure_filename(filename), details="Download de backup logico.")
     db.session.commit()
+    if storage_backend == "s3" and (not path or not os.path.exists(path)):
+        return send_stored_file("backups", secure_filename(filename), as_attachment=True, download_name=secure_filename(filename))
     return send_file(path, as_attachment=True, download_name=secure_filename(filename), mimetype="application/json")
 
 
