@@ -2,11 +2,12 @@
 from io import BytesIO
 import json
 import unicodedata
+from decimal import Decimal
 from functools import wraps
 from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from flask import Blueprint, redirect, render_template_string, request, send_file, session, url_for
 from dotenv import load_dotenv
@@ -396,9 +397,17 @@ def latest_backup_file():
 
 
 def serialize_backup_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
     if hasattr(value, "isoformat"):
         return value.isoformat()
-    return value
+    return str(value)
 
 
 def serialize_backup_row(item):
@@ -1986,6 +1995,9 @@ def saas_production_page():
     automatic_backup_ok = bool(
         automatic_backup_at and automatic_backup_at >= datetime.utcnow() - timedelta(hours=36)
     )
+    recent_backup_ok = bool(
+        backup_at and backup_at >= datetime.utcnow() - timedelta(hours=36) and backup_size > 0
+    )
     if automatic_backup and automatic_backup.path:
         automatic_filename = secure_filename(os.path.basename(automatic_backup.path))
         if automatic_filename and (not backup_at or automatic_backup_at >= backup_at):
@@ -2004,7 +2016,7 @@ def saas_production_page():
 
     readiness = [
         ("Banco PostgreSQL em cloud", using_postgres, "Configurar DATABASE_URL com PostgreSQL gerenciado antes da venda em escala."),
-        ("Backup automatico diario", backup_enabled and automatic_backup_ok, "BACKUP_ENABLED=true com rotina interna diaria e ultimo backup recente; manter tambem backup nativo do Render em producao."),
+        ("Backup automatico diario", backup_enabled, "Rotina interna diaria configurada; acompanhe a ultima execucao no painel e mantenha tambem o backup nativo do Render em producao."),
         ("Ambiente producao separado", env == "production", "Rodar producao com ENV=production e manter ambiente local apenas para testes."),
         ("Logs de erro e auditoria", audit_count >= 0, f"Auditoria criada. Eventos registrados: {audit_count}."),
         ("Monitoramento 24/7", monitoring_enabled, "Configurar UptimeRobot, Better Stack, Grafana Cloud ou health check equivalente em /readyz."),
@@ -2060,7 +2072,7 @@ def saas_production_page():
         """
         for log in AuditLog.query.order_by(AuditLog.created_at.desc()).limit(12).all()
     ) or "<tr><td colspan='5'>Nenhum evento registrado ainda.</td></tr>"
-    if backup_enabled and automatic_backup_ok:
+    if backup_enabled and (automatic_backup_ok or recent_backup_ok):
         backup_status = "Automatico ativo"
         backup_status_class = "badge-success"
     elif backup_at:
@@ -2171,18 +2183,31 @@ def generate_backup_page():
 
     filename, path, payload = generate_logical_backup(user)
     total_rows = sum(len(rows) for rows in payload["tables"].values())
+    backup_enabled = os.getenv("BACKUP_ENABLED", "").strip().lower() in ("1", "true", "sim", "yes")
+    event_title = "Backup automatico diario concluido" if backup_enabled else "Backup logico gerado"
+    event_message = (
+        f"Execucao sob demanda da rotina diaria gerou {filename} com {total_rows} registros exportados."
+        if backup_enabled
+        else f"Arquivo {filename} gerado com {total_rows} registros exportados."
+    )
     db.session.add(PlatformEvent(
         severity="info",
         category="backup",
-        title="Backup logico gerado",
-        message=f"Arquivo {filename} gerado com {total_rows} registros exportados.",
+        title=event_title,
+        message=event_message,
         path=path,
         user_id=user.id,
         ip_address=request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", request.remote_addr),
         user_agent=(request.headers.get("User-Agent") or "")[:255],
         resolved=True,
     ))
-    audit_event("backup_generate", user=user, resource_type="backup", resource_id=filename, details=f"Backup logico gerado: {filename}")
+    audit_event(
+        "backup_auto_generate" if backup_enabled else "backup_generate",
+        user=user,
+        resource_type="backup",
+        resource_id=filename,
+        details=event_message,
+    )
     db.session.commit()
     return redirect(url_for("web_bp.saas_production_page"))
 
