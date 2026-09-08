@@ -557,10 +557,11 @@ with app.app_context():
     ensure_postgres_schema()
     if os.getenv("RUN_MIGRATIONS", "true").strip().lower() in ("1", "true", "yes", "sim"):
         upgrade(directory=os.path.join(os.path.dirname(__file__), "migrations"))
-    seed_master_user()
-    seed_public_insights()
-    if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
-        seed_demo_data()
+    if os.getenv("RESTORE_MODE", "false").strip().lower() not in ("1", "true", "yes", "sim"):
+        seed_master_user()
+        seed_public_insights()
+        if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
+            seed_demo_data()
 
 from services.backup_scheduler import start_backup_scheduler
 
