@@ -25,6 +25,10 @@ def role_level(user):
     return ROLE_LEVELS.get((getattr(user, "role", "") or "").strip().lower(), 0)
 
 
+def can_manage_operational_data(user):
+    return bool(user.is_master or role_level(user) >= 1)
+
+
 def can_access_base_id(user, base_id, company_id=None):
     if not base_id:
         return bool(user.is_master or role_level(user) >= 3)

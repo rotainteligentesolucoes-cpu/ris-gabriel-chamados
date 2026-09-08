@@ -1,5 +1,6 @@
 # Ambientes e caches
 venv/
+.venv-validation/
 __pycache__/
 *.pyc
 *.pyo
@@ -22,6 +23,7 @@ instance/
 
 # Logs e arquivos temporarios
 *.log
+.backup_daily.lock
 server-start*.log
 cloudflared*.log
 logs/

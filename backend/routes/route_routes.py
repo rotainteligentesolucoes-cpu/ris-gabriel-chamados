@@ -1,6 +1,6 @@
 ﻿from flask import Blueprint, jsonify, request
 
-from auth.security import can_access_base_id, login_required, resolve_base_id, resolve_company_id, role_level, scoped_query
+from auth.security import can_access_base_id, can_manage_operational_data, login_required, resolve_base_id, resolve_company_id, role_level, scoped_query
 from database.database import db
 from models.client import Client
 from models.route import LogisticRoute, RouteStop
@@ -18,6 +18,8 @@ def list_routes():
 @route_bp.route("/routes", methods=["POST"])
 @login_required
 def create_route():
+    if not can_manage_operational_data(request.current_user):
+        return jsonify({"error": "Motoristas nao podem criar rotas"}), 403
     data = request.get_json() or {}
     company_id = resolve_company_id(data)
     if not company_id:

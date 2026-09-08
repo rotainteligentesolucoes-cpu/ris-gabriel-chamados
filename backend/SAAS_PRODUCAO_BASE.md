@@ -32,8 +32,9 @@ Este documento organiza o que precisa estar ativo antes de vender a plataforma e
 
 6. Monitoramento 24/7
    - Health check publico: `/healthz`.
-   - Readiness com banco: `/readyz`.
+   - Readiness oficial com banco: `https://app.rotainteligentesolucoes.com.br/readyz`.
    - Configurar monitor externo apontando para `https://app.rotainteligentesolucoes.com.br/readyz`.
+   - Validar resposta: `database=ok`, `environment=production`, `status=ready`.
 
 7. Controle comercial
    - Tabelas criadas:
@@ -47,13 +48,31 @@ Este documento organiza o que precisa estar ativo antes de vender a plataforma e
    - Aceite registrado no usuario.
    - Revisao juridica recomendada antes da venda em escala.
 
+9. Instancia cloud sem hibernacao
+   - HTTPS e dominio customizado nao impedem hibernacao do plano Free.
+   - Para operacao 24/7 com cliente pagante, usar Instance Type pago no web service `ris-saas`.
+   - Na Render, conferir se o servico esta em Starter ou superior antes do piloto comercial.
+
 ## Ordem recomendada para ir a mercado
 
 1. Finalizar ambiente de producao em cloud.
 2. Ativar PostgreSQL gerenciado.
 3. Configurar backup automatico.
 4. Configurar monitoramento externo 24/7.
-5. Criar planos comerciais reais.
-6. Fechar contrato/termos com advogado.
-7. Rodar piloto com 1 cliente real.
-8. Ajustar precificacao, suporte e onboarding.
+5. Trocar o web service da Render para instancia sem hibernacao.
+6. Criar planos comerciais reais.
+7. Fechar contrato/termos com advogado.
+8. Rodar piloto com 1 cliente real.
+9. Ajustar precificacao, suporte e onboarding.
+
+## Piloto com 1 cliente real
+
+Objetivo: provar a operacao completa da RIS com dados reais antes da venda em escala.
+
+- Cadastrar a empresa cliente real.
+- Criar base/unidade e usuarios de operador, gestor e motorista.
+- Cadastrar pontos reais com coordenadas, janela de atendimento e prioridade.
+- Gerar uma rota oficial com data definida.
+- Testar a execucao no celular do motorista em rede 4G/5G.
+- Salvar relatorio final e registrar feedback do cliente.
+- Manter UptimeRobot/Better Stack/Grafana validando `/readyz` durante o piloto.

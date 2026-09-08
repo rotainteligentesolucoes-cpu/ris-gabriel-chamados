@@ -19,7 +19,7 @@
 
 - [ ] Web service Python ativo.
 - [ ] Start command usando Gunicorn.
-- [ ] Health check apontando para `/healthz`.
+- [ ] Health check do provedor apontando para `/readyz`.
 - [ ] Logs ativados no provedor.
 - [ ] Reinicio automatico em caso de falha.
 
@@ -33,7 +33,8 @@
 
 ## Monitoramento
 
-- [ ] Monitor externo consultando `https://seu-dominio.com/healthz`.
+- [ ] Monitor externo consultando `https://app.rotainteligentesolucoes.com.br/readyz`.
+- [ ] Validacao de conteudo: `database=ok`, `environment=production`, `status=ready`.
 - [ ] Alerta por email ou WhatsApp.
 - [ ] Alerta de uso alto de CPU/RAM.
 - [ ] Alerta de erro 5xx.

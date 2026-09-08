@@ -110,7 +110,7 @@ Use esta fase para colocar o sistema no ar de forma profissional:
 - HTTPS automatico.
 - Dominio proprio, exemplo `app.rotainteligentesolucoes.com.br`.
 - Backups automaticos diarios do banco.
-- Monitoramento externo consultando `/healthz`.
+- Monitoramento externo consultando `/readyz`.
 - Repositorio GitHub privado.
 
 ### Fase 2 - Mais estabilidade
@@ -137,21 +137,30 @@ Para reduzir queda ao maximo:
 
 ## Health check
 
-O sistema possui rota de monitoramento:
+O sistema possui duas rotas de monitoramento:
 
 ```text
 /healthz
+/readyz
 ```
 
-Ela retorna `200` quando a aplicacao e o banco estao respondendo.
+Use `/healthz` para confirmar que a aplicacao respondeu.
+
+Use `/readyz` para producao, Render e monitores externos, porque ela tambem testa o banco de dados.
 
 Configure o provedor ou uma ferramenta externa para testar:
 
 ```text
-https://seu-dominio.com/healthz
+https://app.rotainteligentesolucoes.com.br/readyz
 ```
 
-Se retornar erro, o monitoramento deve avisar imediatamente.
+Resposta esperada:
+
+```json
+{"database":"ok","environment":"production","status":"ready"}
+```
+
+Se retornar erro, status diferente de `ready` ou `database` diferente de `ok`, o monitoramento deve avisar imediatamente.
 
 ## O que contratar/configurar
 
@@ -186,7 +195,19 @@ ORS_API_KEY=...
 MASTER_EMAIL=rotainteligentesolucoes@gmail.com
 MASTER_PASSWORD=...
 MASTER_NAME=Rota Inteligente Solucoes
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=rotainteligentesolucoes@gmail.com
+SMTP_PASSWORD=senha_de_app_do_google
+SMTP_FROM=rotainteligentesolucoes@gmail.com
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
 ```
+
+Para `SMTP_PASSWORD`, ative a verificacao em duas etapas na conta Google e gere
+uma Senha de app exclusiva chamada `RIS Alertas`. Nao use a senha normal do Gmail
+e nao grave esse segredo no repositorio. No Render, cadastre a senha somente em
+Environment > Environment Variables.
 
 ## Comando de start
 

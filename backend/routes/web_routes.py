@@ -9,7 +9,7 @@ from math import asin, cos, radians, sin, sqrt
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from flask import Blueprint, redirect, render_template_string, request, send_file, session, url_for
+from flask import Blueprint, current_app, redirect, render_template_string, request, send_file, session, url_for
 from dotenv import load_dotenv
 from markupsafe import escape
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -28,6 +28,7 @@ from models.company import Company, CompanyBase
 from models.operation import ManualLocation, Merchandise, MerchandiseScan, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteTransfer, StopObservation, StopProof, TelemetryEvent
 from models.route import LogisticRoute, RouteStop
 from models.saas import AuditLog, CompanySubscription, PlatformEvent, SubscriptionPlan
+from services.security_alerts import route_alert_recipient_emails, send_route_access_alert_async
 from models.user import User
 from models.vehicle import Vehicle
 from storage.files import save_bytes, save_upload, send_stored_file
@@ -301,6 +302,15 @@ def web_login_required(func):
             session.clear()
             return redirect(url_for("web_bp.login_page", sessao="encerrada"))
         request.web_user = user
+        denied_route = unauthorized_route_requested_by_driver(user)
+        if denied_route:
+            record_unauthorized_driver_route_access(user, denied_route)
+            return layout(
+                "Acesso negado",
+                "<div class='card'><h2>Esta rota nao pertence ao seu login.</h2>"
+                "<p class='muted'>A tentativa foi registrada e a equipe responsavel sera notificada.</p></div>",
+                "motorista",
+            ), 403
         return func(*args, **kwargs)
     return wrapper
 
@@ -328,6 +338,98 @@ def audit_event(action, user=None, company_id=None, resource_type=None, resource
         ))
     except Exception:
         pass
+
+
+def _request_integer(name):
+    values = [request.view_args or {}, request.args, request.form]
+    payload = request.get_json(silent=True) if request.is_json else {}
+    if isinstance(payload, dict):
+        values.append(payload)
+    for source in values:
+        value = source.get(name)
+        if value not in (None, ""):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def requested_route_record():
+    for field in ("route_id", "from_route_id", "to_route_id"):
+        route_id = _request_integer(field)
+        if route_id:
+            route = LogisticRoute.query.get(route_id)
+            if route:
+                return route
+
+    stop_id = _request_integer("route_stop_id") or _request_integer("stop_id")
+    if stop_id:
+        stop = RouteStop.query.get(stop_id)
+        if stop:
+            return LogisticRoute.query.get(stop.route_id)
+
+    proof_id = _request_integer("proof_id")
+    if proof_id:
+        proof = StopProof.query.get(proof_id)
+        if proof:
+            return LogisticRoute.query.get(proof.route_id)
+
+    filename = (request.view_args or {}).get("filename")
+    if filename:
+        safe_name = secure_filename(filename)
+        proof = StopProof.query.filter(
+            (StopProof.photo_filename == safe_name) | (StopProof.invoice_file_filename == safe_name)
+        ).first()
+        if proof:
+            return LogisticRoute.query.get(proof.route_id)
+    return None
+
+
+def unauthorized_route_requested_by_driver(user):
+    if not is_driver(user):
+        return None
+    route = requested_route_record()
+    if route and route.driver_user_id != user.id:
+        return route
+    return None
+
+
+def record_unauthorized_driver_route_access(user, route):
+    ip_address = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", request.remote_addr)
+    details = (
+        f"Motorista {user.name} ({user.email}, ID {user.id}) tentou acessar a rota "
+        f"{route.id} atribuida ao usuario {route.driver_user_id or 'nao definido'}. "
+        f"Metodo: {request.method}; caminho: {request.full_path[:500]}; IP: {ip_address}."
+    )
+    audit_event(
+        "driver_unauthorized_route_access",
+        user=user,
+        company_id=route.company_id or user.company_id,
+        resource_type="logistic_route",
+        resource_id=route.id,
+        details=details,
+    )
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    recipients = route_alert_recipient_emails(User, route.company_id, route.base_id)
+    subject = f"[RIS] Tentativa de acesso indevido a rota {route.id}"
+    body = (
+        "O RIS bloqueou uma tentativa de acesso a uma rota atribuida a outro motorista.\n\n"
+        f"Motorista: {user.name}\n"
+        f"Login: {user.email}\n"
+        f"ID do motorista: {user.id}\n"
+        f"Rota acessada: {route.id} - {route.name or 'Sem nome'}\n"
+        f"Motorista responsavel pela rota: {route.driver_user_id or 'Nao atribuido'}\n"
+        f"Data/hora UTC: {datetime.utcnow().isoformat()}Z\n"
+        f"IP: {ip_address}\n"
+        f"Endereco solicitado: {request.url}\n\n"
+        "A tentativa foi bloqueada e registrada na auditoria do sistema."
+    )
+    send_route_access_alert_async(recipients, subject, body, current_app.logger)
 
 
 BACKUP_MODELS = [
@@ -1712,6 +1814,8 @@ def guided_implementation_page():
     today_routes_count = official_routes_query.filter(LogisticRoute.planned_date == today).count()
     completed_routes_count = official_routes_query.filter(LogisticRoute.status.in_(("completed", "concluida", "finalizada", "realizada"))).count()
     reports_count = ReportSnapshot.query.filter_by(company_id=selected_company_id).count() if selected_company_id else 0
+    monitoring_url = os.getenv("UPTIME_MONITOR_URL", "").strip() or os.getenv("MONITORING_URL", "").strip()
+    monitoring_done = bool(monitoring_url)
 
     company_done = bool(selected_company and selected_company.active)
     bases_done = base_count > 0
@@ -1871,6 +1975,27 @@ def guided_implementation_page():
     launch_ready = all(step["done"] for step in steps[:7])
     launch_badge = "Pronto para vender" if launch_ready else "Implantacao em andamento"
     launch_text = "O cliente ja tem estrutura operacional para demonstracao e uso acompanhado." if launch_ready else "Complete o proximo passo para transformar os modulos em uma jornada comercial clara."
+    pilot_items = [
+        ("Empresa cliente real", company_done, "Cadastrar a empresa real que vai validar a RIS fora do ambiente de demonstracao."),
+        ("Base e usuarios", bases_done and collaborators_done, "Criar base/unidade, operador, gestor e motorista para testar permissoes por perfil."),
+        ("Pontos reais", clients_done, "Cadastrar clientes com endereco, latitude, longitude, janela e prioridade reais."),
+        ("Rota oficial", official_done, "Gerar uma rota oficial com data definida para acompanhar a operacao."),
+        ("Teste em celular", execution_done, "Validar login do motorista, execucao, comprovantes e leitura em rede 4G/5G."),
+        ("Relatorio final", reports_done, "Salvar relatorio para comparar promessa, execucao e resultado do cliente."),
+        ("Monitor externo", monitoring_done, "Manter UptimeRobot, Better Stack ou Grafana consultando /readyz a cada 5 minutos."),
+    ]
+    pilot_done_count = sum(1 for _, done, _ in pilot_items if done)
+    pilot_progress = int(round((pilot_done_count / len(pilot_items)) * 100))
+    pilot_cards = "".join(
+        f"""
+        <div class="pilot-card {'ok' if done else 'pending'}">
+            <span>{'OK' if done else 'Pendente'}</span>
+            <strong>{title}</strong>
+            <p>{description}</p>
+        </div>
+        """
+        for title, done, description in pilot_items
+    )
     empty_company_notice = ""
     if user.is_master and not companies:
         empty_company_notice = """
@@ -1916,10 +2041,26 @@ def guided_implementation_page():
         .summary-card {{ background:#fff; border:1px solid #d7e0ec; border-radius:8px; padding:14px; }}
         .summary-card span {{ color:#667085; font-size:12px; font-weight:900; text-transform:uppercase; }}
         .summary-card strong {{ display:block; margin-top:6px; font-size:22px; }}
+        .pilot-panel {{ background:#fff; border:1px solid #d7e0ec; border-radius:8px; padding:16px; margin:16px 0; box-shadow:0 6px 18px rgba(16,24,40,.04); }}
+        .pilot-head {{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }}
+        .pilot-head h2 {{ margin:0 0 6px; }}
+        .pilot-head p {{ margin:0; color:#667085; line-height:1.45; }}
+        .pilot-score {{ min-width:150px; text-align:right; font-weight:900; color:#1849a9; }}
+        .pilot-grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }}
+        .pilot-card {{ border:1px solid #d7e0ec; border-radius:8px; padding:12px; background:#f8fafc; }}
+        .pilot-card span {{ display:inline-block; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:900; margin-bottom:8px; background:#fff7ed; color:#c2410c; }}
+        .pilot-card.ok span {{ background:#ecfdf3; color:#14804a; }}
+        .pilot-card strong {{ display:block; color:#182235; }}
+        .pilot-card p {{ margin:6px 0 0; color:#667085; line-height:1.35; font-size:13px; }}
+        .infra-note {{ display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; border:1px solid #fed7aa; background:#fff7ed; border-radius:8px; padding:12px; margin-top:12px; }}
+        .infra-note strong {{ color:#9a3412; }}
+        .infra-note p {{ margin:4px 0 0; color:#7c2d12; line-height:1.4; }}
+        .infra-note a {{ white-space:nowrap; }}
         @media (max-width:900px) {{
-            .implant-hero,.implant-filter,.implant-summary {{ grid-template-columns:1fr; }}
+            .implant-hero,.implant-filter,.implant-summary,.pilot-grid,.infra-note {{ grid-template-columns:1fr; }}
             .implant-step {{ grid-template-columns:34px 1fr; }}
             .step-action {{ grid-column:2; width:100%; text-align:center; }}
+            .pilot-score {{ text-align:left; }}
         }}
     </style>
     {empty_company_notice}
@@ -1943,6 +2084,23 @@ def guided_implementation_page():
         <div class="summary-card"><span>Colaboradores</span><strong>{collaborator_count}</strong></div>
         <div class="summary-card"><span>Clientes / pontos</span><strong>{client_count}</strong></div>
         <div class="summary-card"><span>Rotas oficiais</span><strong>{official_routes_count}</strong></div>
+    </section>
+    <section class="pilot-panel">
+        <div class="pilot-head">
+            <div>
+                <h2>Piloto com cliente real</h2>
+                <p>Use este bloco para conduzir a primeira operacao acompanhada: configurar cliente, rodar uma rota real, colher feedback e transformar isso em material comercial.</p>
+            </div>
+            <div class="pilot-score">{pilot_done_count} de {len(pilot_items)} prontos<br>{pilot_progress}%</div>
+        </div>
+        <div class="pilot-grid">{pilot_cards}</div>
+        <div class="infra-note">
+            <div>
+                <strong>Atencao antes de vender como 24/7</strong>
+                <p>O dominio HTTPS esta correto, mas se o web service da Render estiver no plano Free ele pode hibernar por inatividade. Para cliente pagante, ajuste o Instance Type do servico ris-saas para Starter ou superior.</p>
+            </div>
+            <a class="btn btn-secondary" href="/web/saas-producao">Ver prontidao SaaS</a>
+        </div>
     </section>
     <section class="implant-grid">{step_cards}</section>
     """
@@ -2013,13 +2171,16 @@ def saas_production_page():
     plan_count = SubscriptionPlan.query.filter_by(active=True).count()
     subscription_count = CompanySubscription.query.count()
     company_count = Company.query.count()
+    render_instance_type = os.getenv("RENDER_INSTANCE_TYPE", "").strip() or os.getenv("RENDER_PLAN", "").strip()
+    render_instance_label = render_instance_type or "Verificar no painel da Render"
+    render_instance_ready = bool(render_instance_type and render_instance_type.lower() not in ("free", "starter-free"))
 
     readiness = [
         ("Banco PostgreSQL em cloud", using_postgres, "Configurar DATABASE_URL com PostgreSQL gerenciado antes da venda em escala."),
         ("Backup automatico diario", backup_enabled, "Rotina interna diaria configurada; acompanhe a ultima execucao no painel e mantenha tambem o backup nativo do Render em producao."),
         ("Ambiente producao separado", env == "production", "Rodar producao com ENV=production e manter ambiente local apenas para testes."),
         ("Logs de erro e auditoria", audit_count >= 0, f"Auditoria criada. Eventos registrados: {audit_count}."),
-        ("Monitoramento 24/7", monitoring_enabled, "Configurar UptimeRobot, Better Stack, Grafana Cloud ou health check equivalente em /readyz."),
+        ("Monitoramento 24/7", monitoring_enabled, f"Monitor externo deve consultar {default_readyz_url} e validar status=ready, database=ok e environment=production."),
         ("Painel de saude", True, "Endpoints ativos: /healthz e /readyz."),
         ("Controle de planos/assinaturas", plan_count > 0, f"Planos ativos: {plan_count}. Assinaturas cadastradas: {subscription_count}."),
         ("Login por empresa/base/perfil", True, "Multiempresa, bases/unidades e perfis ja estao estruturados."),
@@ -2110,8 +2271,16 @@ def saas_production_page():
         .backup-box {{ border:1px solid #d7e0ec; border-radius:8px; padding:12px; background:#f8fafc; }}
         .backup-box span {{ display:block; color:#667085; font-size:12px; font-weight:900; text-transform:uppercase; margin-bottom:5px; }}
         .backup-actions {{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }}
+        .monitor-panel {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }}
+        .monitor-box {{ border:1px solid #d7e0ec; border-radius:8px; padding:12px; background:#f8fafc; }}
+        .monitor-box span {{ display:block; color:#667085; font-size:12px; font-weight:900; text-transform:uppercase; margin-bottom:5px; }}
+        .infra-panel {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:16px; }}
+        .infra-box {{ border:1px solid #d7e0ec; border-radius:8px; padding:12px; background:#f8fafc; }}
+        .infra-box.warning {{ border-color:#fed7aa; background:#fff7ed; }}
+        .infra-box span {{ display:block; color:#667085; font-size:12px; font-weight:900; text-transform:uppercase; margin-bottom:5px; }}
+        .infra-box.warning span,.infra-box.warning strong {{ color:#9a3412; }}
         @media (max-width:1100px) {{ .saas-hero,.saas-form {{ grid-template-columns:1fr; }} }}
-        @media (max-width:800px) {{ .backup-panel {{ grid-template-columns:1fr; }} }}
+        @media (max-width:800px) {{ .backup-panel,.monitor-panel,.infra-panel {{ grid-template-columns:1fr; }} }}
     </style>
     <section class="saas-hero">
         <div class="saas-progress">
@@ -2122,6 +2291,27 @@ def saas_production_page():
             <div class="mono" style="margin-top:12px;">Health: /healthz<br>Ready: /readyz<br>Ambiente: {escape(env)}<br>Empresas cadastradas: {company_count}</div>
         </div>
         <div class="saas-checks">{checklist_html}</div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+        <h2>Monitoramento 24/7</h2>
+        <p class="muted">Configure UptimeRobot, Better Stack ou Grafana Cloud para validar o endpoint de prontidao da producao. O monitor interno do Codex foi pausado porque o ambiente local gerou falso alerta TLS.</p>
+        <div class="monitor-panel">
+            <div class="monitor-box"><span>Endpoint oficial</span><strong class="mono">{default_readyz_url}</strong></div>
+            <div class="monitor-box"><span>Monitor externo</span><strong>{'Configurado' if monitoring_enabled else 'Pendente'}</strong></div>
+            <div class="monitor-box"><span>URL configurada</span><strong class="mono">{escape(monitoring_target)}</strong></div>
+            <div class="monitor-box"><span>Resposta esperada</span><strong class="mono">database=ok | environment=production | status=ready</strong></div>
+        </div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+        <h2>Infraestrutura 24/7</h2>
+        <p class="muted">Dominio customizado e HTTPS confirmam acesso seguro, mas a disponibilidade continua dependendo do plano do web service. Instancia Free pode hibernar por inatividade.</p>
+        <div class="infra-panel">
+            <div class="infra-box"><span>Dominio publico</span><strong class="mono">https://app.rotainteligentesolucoes.com.br</strong></div>
+            <div class="infra-box"><span>Render web service</span><strong>{escape(render_instance_label)}</strong></div>
+            <div class="infra-box {'warning' if not render_instance_ready else ''}"><span>Acao antes do cliente pagante</span><strong>{'Sem hibernacao configurada' if render_instance_ready else 'Trocar Free por Starter ou superior'}</strong></div>
+        </div>
     </section>
 
     <section class="card" style="margin-top:16px;">
@@ -9828,13 +10018,20 @@ def update_route_status_page():
     from database.database import db
 
     if action == "start":
+        if (route.status or "").lower() in ("em_rota", "concluida", "finalizada", "realizada") and route.actual_start_time:
+            return redirect(url_for("web_bp.operational_page", route_id=route.id, data=route.planned_date or None))
         route.actual_start_time = event_time
         route.status = "em_rota"
         obs_type = "rota_iniciada"
         description = f"Rota iniciada pela operacao as {event_time}."
     elif action == "finish":
+        if (route.status or "").lower() in ("concluida", "finalizada", "realizada") and route.actual_end_time:
+            return redirect(url_for("web_bp.operational_page", route_id=route.id, data=route.planned_date or None))
         route.actual_end_time = event_time
         route.status = "concluida"
+        for stop in route.stops:
+            if (stop.status or "").lower() != "realizado":
+                stop.status = "realizado"
         obs_type = "rota_finalizada"
         description = f"Rota finalizada pela operacao as {event_time}, com retorno a BASE."
     else:
