@@ -125,6 +125,18 @@ class ApplicationSmokeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "RIS ONLINE")
 
+    def test_master_can_open_saas_production_page(self):
+        with app.app_context():
+            master = User.query.filter_by(role="master").first()
+            master_id = master.id
+        with self.client.session_transaction() as web_session:
+            web_session["user_id"] = master_id
+
+        response = self.client.get("/web/saas-producao")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Backup e restauracao", response.get_data(as_text=True))
+
     def test_driver_cannot_create_operational_records(self):
         headers = {"Authorization": f"Bearer {self.driver_token}"}
         requests = (

@@ -2163,7 +2163,11 @@ def saas_production_page():
             backup_path = backup_file_path(automatic_filename)
             backup_at = automatic_backup_at
             backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
-    monitoring_enabled = bool(os.getenv("MONITORING_URL", "").strip() or os.getenv("UPTIME_MONITOR_URL", "").strip())
+    default_readyz_url = "https://app.rotainteligentesolucoes.com.br/readyz"
+    monitoring_target = os.getenv("UPTIME_MONITOR_URL", "").strip() or os.getenv("MONITORING_URL", "").strip()
+    monitoring_enabled = bool(monitoring_target)
+    if not monitoring_target:
+        monitoring_target = "Nao configurada"
     secret_ready = os.getenv("SECRET_KEY", "") not in ("", "ris_enterprise_2026")
     jwt_ready = os.getenv("JWT_SECRET", "") not in ("", "ris_jwt_enterprise_2026_multiempresa_chave_segura_local")
     master_password_ready = os.getenv("MASTER_PASSWORD", "RIS@12345") != "RIS@12345"
