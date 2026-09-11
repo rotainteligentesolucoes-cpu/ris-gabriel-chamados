@@ -136,6 +136,19 @@ class ApplicationSmokeTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Backup e restauracao", response.get_data(as_text=True))
+        self.assertNotIn('href="/web/minha-assinatura"', response.get_data(as_text=True))
+
+    def test_master_subscription_link_returns_to_saas_administration(self):
+        with app.app_context():
+            master = User.query.filter_by(role="master").first()
+            master_id = master.id
+        with self.client.session_transaction() as web_session:
+            web_session["user_id"] = master_id
+
+        response = self.client.get("/web/minha-assinatura", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/web/saas-producao"))
 
     def test_commercial_plans_exist_without_demo_data(self):
         with app.app_context():

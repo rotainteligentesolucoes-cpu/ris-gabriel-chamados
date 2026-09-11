@@ -830,7 +830,7 @@ def layout(title, body, active="dashboard"):
             <a class="{active_class('relatorios')}" href="/web/relatorios">Relatorios 90 dias</a>
         """
         admin_links = nav_section("Gerencia", admin_items, active in ("bases", "colaboradores", "relatorios"))
-    if user and can_see_finance(user):
+    if user and can_see_finance(user) and not can_see_master(user):
         finance_items = f"""
             <a class="{active_class('financeiro')}" href="/web/financeiro">Valores</a>
             <a class="{active_class('assinatura')}" href="/web/minha-assinatura">Assinatura / PIX</a>
@@ -2407,6 +2407,8 @@ def saas_production_page():
 @web_login_required
 def my_subscription_page():
     user = request.web_user
+    if can_see_master(user):
+        return redirect(url_for("web_bp.saas_production_page"))
     if not can_see_finance(user) or not user.company_id:
         return layout("Acesso negado", "<div class='card'><h2>Acesso exclusivo do responsavel financeiro da empresa.</h2></div>", "assinatura"), 403
 
