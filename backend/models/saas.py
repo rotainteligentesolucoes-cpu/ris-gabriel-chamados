@@ -44,6 +44,10 @@ class CompanySubscription(db.Model):
     start_date = db.Column(db.String(10), nullable=True)
     end_date = db.Column(db.String(10), nullable=True)
     renewal_day = db.Column(db.Integer, nullable=True)
+    payment_method = db.Column(db.String(20), default="pix", nullable=False)
+    payment_status = db.Column(db.String(30), default="pending", nullable=False)
+    payment_reference = db.Column(db.String(120), nullable=True)
+    last_payment_at = db.Column(db.DateTime, nullable=True)
     notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
@@ -61,6 +65,10 @@ class CompanySubscription(db.Model):
             "start_date": self.start_date,
             "end_date": self.end_date,
             "renewal_day": self.renewal_day,
+            "payment_method": self.payment_method,
+            "payment_status": self.payment_status,
+            "payment_reference": self.payment_reference,
+            "last_payment_at": self.last_payment_at.isoformat() if self.last_payment_at else None,
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

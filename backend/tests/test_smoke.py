@@ -19,7 +19,7 @@ os.environ["APP_ENV"] = "testing"
 from main import app, db  # noqa: E402
 from models.company import Company  # noqa: E402
 from models.route import LogisticRoute  # noqa: E402
-from models.saas import AuditLog  # noqa: E402
+from models.saas import AuditLog, CompanySubscription, SubscriptionPlan  # noqa: E402
 from models.user import User  # noqa: E402
 from models.vehicle import Vehicle  # noqa: E402
 
@@ -136,6 +136,30 @@ class ApplicationSmokeTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Backup e restauracao", response.get_data(as_text=True))
+
+    def test_commercial_plans_exist_without_demo_data(self):
+        with app.app_context():
+            plans = {
+                plan.name: plan
+                for plan in SubscriptionPlan.query.filter_by(active=True).all()
+            }
+
+        self.assertEqual(set(plans), {"Entrada", "Profissional", "Enterprise"})
+        self.assertEqual(plans["Entrada"].monthly_price, 299.0)
+        self.assertEqual(plans["Profissional"].monthly_price, 699.0)
+        self.assertEqual(plans["Enterprise"].monthly_price, 0.0)
+
+    def test_subscription_uses_pix_only_by_default(self):
+        with app.app_context():
+            company = Company.query.filter_by(email="seguranca@ris.test").first()
+            plan = SubscriptionPlan.query.filter_by(name="Entrada").first()
+            subscription = CompanySubscription(company_id=company.id, plan_id=plan.id)
+            db.session.add(subscription)
+            db.session.flush()
+
+            self.assertEqual(subscription.payment_method, "pix")
+            self.assertEqual(subscription.payment_status, "pending")
+            db.session.rollback()
 
     def test_driver_cannot_create_operational_records(self):
         headers = {"Authorization": f"Bearer {self.driver_token}"}

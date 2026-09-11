@@ -833,8 +833,9 @@ def layout(title, body, active="dashboard"):
     if user and can_see_finance(user):
         finance_items = f"""
             <a class="{active_class('financeiro')}" href="/web/financeiro">Valores</a>
+            <a class="{active_class('assinatura')}" href="/web/minha-assinatura">Assinatura / PIX</a>
         """
-        finance_links = nav_section("CEO", finance_items, active in ("financeiro",))
+        finance_links = nav_section("CEO", finance_items, active in ("financeiro", "assinatura"))
     if user and can_see_master(user):
         master_items = f"""
             <a class="{active_class('contatos')}" href="/web/contatos">Contato publico geral</a>
@@ -2119,6 +2120,9 @@ def saas_production_page():
         company_id = request.form.get("company_id", type=int)
         plan_id = request.form.get("plan_id", type=int)
         status = request.form.get("status", "trial").strip() or "trial"
+        payment_status = request.form.get("payment_status", "pending").strip().lower()
+        if payment_status not in ("pending", "paid", "overdue", "cancelled"):
+            payment_status = "pending"
         company = Company.query.get(company_id)
         plan = SubscriptionPlan.query.get(plan_id) if plan_id else None
         if company:
@@ -2130,8 +2134,20 @@ def saas_production_page():
             subscription.status = status[:40]
             subscription.billing_email = request.form.get("billing_email", "").strip() or company.email
             subscription.renewal_day = request.form.get("renewal_day", type=int)
+            subscription.payment_method = "pix"
+            subscription.payment_status = payment_status
+            subscription.payment_reference = request.form.get("payment_reference", "").strip()[:120] or None
+            if payment_status == "paid":
+                subscription.last_payment_at = datetime.utcnow()
             subscription.notes = request.form.get("notes", "").strip() or None
-            audit_event("subscription_update", user=user, company_id=company.id, resource_type="company_subscription", resource_id=company.id, details=f"Plano: {plan.name if plan else 'sem plano'} | Status: {status}")
+            audit_event(
+                "subscription_update",
+                user=user,
+                company_id=company.id,
+                resource_type="company_subscription",
+                resource_id=company.id,
+                details=f"Plano: {plan.name if plan else 'sem plano'} | Assinatura: {status} | Pagamento PIX: {payment_status}",
+            )
             db.session.commit()
             notice = "<div class='badge badge-success'>Assinatura atualizada.</div>"
         else:
@@ -2174,6 +2190,9 @@ def saas_production_page():
     audit_count = AuditLog.query.count()
     plan_count = SubscriptionPlan.query.filter_by(active=True).count()
     subscription_count = CompanySubscription.query.count()
+    pix_key = os.getenv("PIX_KEY", "").strip()
+    pix_key_configured = bool(pix_key and pix_key != "configure_a_chave_pix_empresarial")
+    pix_receiver_name = os.getenv("PIX_RECEIVER_NAME", "Rota Inteligente Solucoes").strip()
     company_count = Company.query.count()
     render_instance_type = os.getenv("RENDER_INSTANCE_TYPE", "").strip() or os.getenv("RENDER_PLAN", "").strip()
     render_instance_label = render_instance_type or "Verificar no painel da Render"
@@ -2186,7 +2205,7 @@ def saas_production_page():
         ("Logs de erro e auditoria", audit_count >= 0, f"Auditoria criada. Eventos registrados: {audit_count}."),
         ("Monitoramento 24/7", monitoring_enabled, f"Monitor externo deve consultar {default_readyz_url} e validar status=ready, database=ok e environment=production."),
         ("Painel de saude", True, "Endpoints ativos: /healthz e /readyz."),
-        ("Controle de planos/assinaturas", plan_count > 0, f"Planos ativos: {plan_count}. Assinaturas cadastradas: {subscription_count}."),
+        ("Planos e cobranca PIX", plan_count > 0 and pix_key_configured, f"Planos ativos: {plan_count}. Assinaturas: {subscription_count}. Chave PIX: {'configurada' if pix_key_configured else 'pendente'}."),
         ("Login por empresa/base/perfil", True, "Multiempresa, bases/unidades e perfis ja estao estruturados."),
         ("Termos e licenca", True, f"Termos ativos na versao {TERMS_VERSION} com aceite registrado no usuario."),
         ("Segredos de producao", secret_ready and jwt_ready and master_password_ready, "Trocar SECRET_KEY, JWT_SECRET e MASTER_PASSWORD antes de ativar producao."),
@@ -2210,7 +2229,10 @@ def saas_production_page():
     plans = SubscriptionPlan.query.order_by(SubscriptionPlan.monthly_price, SubscriptionPlan.name).all()
     subscriptions = CompanySubscription.query.order_by(CompanySubscription.created_at.desc()).all()
     companies = Company.query.order_by(Company.name).all()
-    plan_options = "".join(f"<option value='{plan.id}'>{escape(plan.name)} - {format_money(plan.monthly_price)}</option>" for plan in plans)
+    plan_options = "".join(
+        f"<option value='{plan.id}'>{escape(plan.name)} - {format_money(plan.monthly_price) if plan.monthly_price > 0 else 'Sob consulta'}</option>"
+        for plan in plans
+    )
     company_options = "".join(f"<option value='{company.id}'>{escape(company.name)}</option>" for company in companies)
     subscription_rows = "".join(
         f"""
@@ -2218,12 +2240,18 @@ def saas_production_page():
             <td>{escape(subscription.company.name if subscription.company else '-')}</td>
             <td>{escape(subscription.plan.name if subscription.plan else 'Sem plano')}</td>
             <td><span class="badge">{escape(subscription.status)}</span></td>
+            <td><strong>PIX</strong><br><span class="muted">{escape(subscription.payment_status or 'pending')}</span></td>
             <td>{escape(subscription.billing_email or '-')}</td>
             <td>{subscription.renewal_day or '-'}</td>
+            <td>{subscription.last_payment_at.strftime('%d/%m/%Y %H:%M') if subscription.last_payment_at else '-'}</td>
         </tr>
         """
         for subscription in subscriptions
-    ) or "<tr><td colspan='5'>Nenhuma assinatura cadastrada.</td></tr>"
+    ) or "<tr><td colspan='7'>Nenhuma assinatura cadastrada.</td></tr>"
+
+    pix_key_masked = "Nao configurada"
+    if pix_key_configured:
+        pix_key_masked = pix_key if len(pix_key) <= 6 else f"{pix_key[:3]}***{pix_key[-3:]}"
 
     audit_rows = "".join(
         f"""
@@ -2337,19 +2365,26 @@ def saas_production_page():
 
     <section class="card">
         <h2>Controle de planos e assinaturas</h2>
+        <p class="muted">Forma de pagamento exclusiva: <strong>PIX</strong>. A confirmacao e manual ate uma integracao bancaria ser configurada.</p>
+        <div class="monitor-panel" style="margin-bottom:14px;">
+            <div class="monitor-box"><span>Recebedor PIX</span><strong>{escape(pix_receiver_name)}</strong></div>
+            <div class="monitor-box"><span>Chave PIX</span><strong class="mono">{escape(pix_key_masked)}</strong></div>
+        </div>
         {notice}
         <form class="saas-form" method="post">
             <div><label>Empresa</label><select name="company_id" required>{company_options}</select></div>
             <div><label>Plano</label><select name="plan_id">{plan_options}</select></div>
             <div><label>Status</label><select name="status"><option value="trial">Trial</option><option value="active">Ativa</option><option value="past_due">Pendente</option><option value="paused">Pausada</option><option value="cancelled">Cancelada</option></select></div>
+            <div><label>Pagamento</label><select name="payment_status"><option value="pending">PIX pendente</option><option value="paid">PIX recebido</option><option value="overdue">PIX vencido</option><option value="cancelled">Cancelado</option></select></div>
             <div><label>Renova dia</label><input name="renewal_day" type="number" min="1" max="31"></div>
             <div><label>E-mail cobranca</label><input name="billing_email" type="email"></div>
             <button class="btn" type="submit">Salvar</button>
+            <div style="grid-column:1/-1;"><label>Referencia PIX</label><input name="payment_reference" maxlength="120" placeholder="Identificador ou observacao do comprovante"></div>
             <div style="grid-column:1/-1;"><label>Observacao</label><input name="notes" placeholder="Contrato, condicao comercial ou observacao interna"></div>
         </form>
         <div class="table-wrap" style="margin-top:14px;">
             <table class="table">
-                <thead><tr><th>Empresa</th><th>Plano</th><th>Status</th><th>Cobranca</th><th>Renovacao</th></tr></thead>
+                <thead><tr><th>Empresa</th><th>Plano</th><th>Assinatura</th><th>Pagamento</th><th>Cobranca</th><th>Renovacao</th><th>Ultimo PIX</th></tr></thead>
                 <tbody>{subscription_rows}</tbody>
             </table>
         </div>
@@ -2366,6 +2401,61 @@ def saas_production_page():
     </section>
     """
     return layout("SaaS / Producao", body, "saas")
+
+
+@web_bp.route("/web/minha-assinatura")
+@web_login_required
+def my_subscription_page():
+    user = request.web_user
+    if not can_see_finance(user) or not user.company_id:
+        return layout("Acesso negado", "<div class='card'><h2>Acesso exclusivo do responsavel financeiro da empresa.</h2></div>", "assinatura"), 403
+
+    subscription = CompanySubscription.query.filter_by(company_id=user.company_id).first()
+    if not subscription or not subscription.plan:
+        return layout("Assinatura / PIX", "<div class='card'><h2>Nenhum plano comercial vinculado.</h2><p class='muted'>Entre em contato com a RIS para ativar a assinatura.</p></div>", "assinatura")
+
+    pix_key = os.getenv("PIX_KEY", "").strip()
+    pix_ready = bool(pix_key and pix_key != "configure_a_chave_pix_empresarial")
+    receiver = os.getenv("PIX_RECEIVER_NAME", "Rota Inteligente Solucoes").strip()
+    city = os.getenv("PIX_RECEIVER_CITY", "Santa Maria").strip()
+    instructions = os.getenv("PIX_PAYMENT_INSTRUCTIONS", "Envie o comprovante para a equipe financeira apos o pagamento.").strip()
+    price = format_money(subscription.plan.monthly_price) if subscription.plan.monthly_price > 0 else "Sob consulta"
+    payment_labels = {
+        "pending": "Aguardando PIX",
+        "paid": "PIX recebido",
+        "overdue": "PIX vencido",
+        "cancelled": "Cancelado",
+    }
+    payment_label = payment_labels.get(subscription.payment_status or "pending", "Aguardando PIX")
+    pix_content = "<p class='badge badge-danger'>Chave PIX ainda nao configurada pela RIS.</p>"
+    if pix_ready:
+        pix_content = f"""
+        <label>Chave PIX</label>
+        <div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;'>
+            <input id='ris-pix-key' value='{escape(pix_key)}' readonly style='min-width:280px;flex:1;'>
+            <button class='btn' type='button' onclick="navigator.clipboard.writeText(document.getElementById('ris-pix-key').value);this.textContent='Copiado';">Copiar chave PIX</button>
+        </div>
+        """
+
+    body = f"""
+    <section class='card'>
+        <h2>Pagamento da assinatura por PIX</h2>
+        <p class='muted'>A RIS aceita exclusivamente PIX. Nenhum cartao ou debito automatico sera solicitado.</p>
+        <div class='grid two'>
+            <div><span class='muted'>Plano</span><h3>{escape(subscription.plan.name)}</h3></div>
+            <div><span class='muted'>Mensalidade</span><h3>{price}</h3></div>
+            <div><span class='muted'>Situacao</span><h3>{escape(payment_label)}</h3></div>
+            <div><span class='muted'>Vencimento</span><h3>Dia {subscription.renewal_day or '-'}</h3></div>
+        </div>
+    </section>
+    <section class='card'>
+        <h2>Dados para pagamento</h2>
+        <p><strong>Recebedor:</strong> {escape(receiver)}<br><strong>Cidade:</strong> {escape(city)}</p>
+        {pix_content}
+        <p class='muted' style='margin-top:12px;'>{escape(instructions)}</p>
+    </section>
+    """
+    return layout("Assinatura / PIX", body, "assinatura")
 
 
 @web_bp.route("/web/backup/gerar", methods=["POST"])

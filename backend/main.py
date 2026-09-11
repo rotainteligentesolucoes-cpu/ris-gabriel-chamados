@@ -248,6 +248,12 @@ def ensure_sqlite_schema():
         "merchandises": {
             "base_id": "ALTER TABLE merchandises ADD COLUMN base_id INTEGER",
         },
+        "company_subscriptions": {
+            "payment_method": "ALTER TABLE company_subscriptions ADD COLUMN payment_method VARCHAR(20) DEFAULT 'pix' NOT NULL",
+            "payment_status": "ALTER TABLE company_subscriptions ADD COLUMN payment_status VARCHAR(30) DEFAULT 'pending' NOT NULL",
+            "payment_reference": "ALTER TABLE company_subscriptions ADD COLUMN payment_reference VARCHAR(120)",
+            "last_payment_at": "ALTER TABLE company_subscriptions ADD COLUMN last_payment_at DATETIME",
+        },
     }
 
     for table_name, table_migrations in migrations.items():
@@ -268,6 +274,12 @@ def ensure_postgres_schema():
         "users": {
             "can_view_finance": "ALTER TABLE users ADD COLUMN can_view_finance BOOLEAN DEFAULT FALSE",
         },
+        "company_subscriptions": {
+            "payment_method": "ALTER TABLE company_subscriptions ADD COLUMN payment_method VARCHAR(20) DEFAULT 'pix' NOT NULL",
+            "payment_status": "ALTER TABLE company_subscriptions ADD COLUMN payment_status VARCHAR(30) DEFAULT 'pending' NOT NULL",
+            "payment_reference": "ALTER TABLE company_subscriptions ADD COLUMN payment_reference VARCHAR(120)",
+            "last_payment_at": "ALTER TABLE company_subscriptions ADD COLUMN last_payment_at TIMESTAMP",
+        },
     }
 
     for table_name, table_migrations in migrations.items():
@@ -285,13 +297,16 @@ def ensure_postgres_schema():
     db.session.commit()
 
 
-def seed_demo_data():
-    default_plans = [
-        ("Entrada", "Para operacao inicial com uma empresa, rotas e relatorios basicos.", 299.0, 1, 2, 10, 250, "rotas,clientes,motorista,relatorio"),
-        ("Profissional", "Para empresas com varias bases, mercadorias, comprovantes e torre de controle.", 699.0, 1, 8, 40, 1500, "rotas,mercadorias,comprovantes,telemetria,relatorio"),
-        ("Enterprise", "Para operacao personalizada, suporte avancado e expansao SaaS.", 0.0, None, None, None, None, "multiempresa,api,monitoramento,avancado"),
-    ]
-    for name, description, price, companies, bases, users, routes_month, features in default_plans:
+DEFAULT_SUBSCRIPTION_PLANS = (
+    ("Entrada", "Para operacao inicial com uma empresa, rotas e relatorios basicos.", 299.0, 1, 2, 10, 250, "rotas,clientes,motorista,relatorio"),
+    ("Profissional", "Para empresas com varias bases, mercadorias, comprovantes e torre de controle.", 699.0, 1, 8, 40, 1500, "rotas,mercadorias,comprovantes,telemetria,relatorio"),
+    ("Enterprise", "Para operacao personalizada, suporte avancado e expansao SaaS.", 0.0, None, None, None, None, "multiempresa,api,monitoramento,avancado"),
+)
+
+
+def seed_subscription_plans():
+    """Cria o catalogo comercial mesmo quando os dados de demonstracao estao desativados."""
+    for name, description, price, companies, bases, users, routes_month, features in DEFAULT_SUBSCRIPTION_PLANS:
         if not SubscriptionPlan.query.filter_by(name=name).first():
             db.session.add(SubscriptionPlan(
                 name=name,
@@ -304,7 +319,10 @@ def seed_demo_data():
                 features_json=features,
                 active=True,
             ))
-    db.session.flush()
+    db.session.commit()
+
+
+def seed_demo_data():
 
     company = Company.query.filter_by(email="demo@ris.local").first()
     if not company:
@@ -560,6 +578,7 @@ with app.app_context():
     if os.getenv("RESTORE_MODE", "false").strip().lower() not in ("1", "true", "yes", "sim"):
         seed_master_user()
         seed_public_insights()
+        seed_subscription_plans()
         if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
             seed_demo_data()
 
