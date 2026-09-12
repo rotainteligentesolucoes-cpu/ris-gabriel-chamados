@@ -1,4 +1,5 @@
 ﻿import os
+import hashlib
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from time import time
@@ -52,6 +53,9 @@ LOGIN_ATTEMPTS = {}
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "8"))
 LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "900"))
 LOGIN_LOCK_SECONDS = int(os.getenv("LOGIN_LOCK_SECONDS", "900"))
+MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "10"))
+_REDIS_CLIENT = None
+_REDIS_URL = None
 
 
 def request_ip():
@@ -67,7 +71,53 @@ def login_attempt_key(email):
     return f"{request_ip()}::{normalized_email}"
 
 
+def password_validation_error(password):
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        return f"Use uma senha com pelo menos {MIN_PASSWORD_LENGTH} caracteres."
+    return None
+
+
+def _redis_client():
+    """Return the shared rate-limit store when Redis is configured and reachable."""
+    global _REDIS_CLIENT, _REDIS_URL
+    redis_url = os.getenv("RATE_LIMIT_REDIS_URL", "").strip() or os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+    if _REDIS_CLIENT is not None and _REDIS_URL == redis_url:
+        return _REDIS_CLIENT
+    try:
+        import redis
+
+        client = redis.Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+        client.ping()
+        _REDIS_CLIENT = client
+        _REDIS_URL = redis_url
+        return client
+    except Exception:
+        _REDIS_CLIENT = None
+        _REDIS_URL = None
+        return None
+
+
+def _redis_login_keys(email):
+    digest = hashlib.sha256(login_attempt_key(email).encode("utf-8")).hexdigest()
+    return f"ris:login:attempts:{digest}", f"ris:login:lock:{digest}"
+
+
 def login_block_seconds(email):
+    client = _redis_client()
+    if client is not None:
+        _attempts_key, lock_key = _redis_login_keys(email)
+        try:
+            ttl = client.ttl(lock_key)
+            return max(0, int(ttl or 0))
+        except Exception:
+            pass
     key = login_attempt_key(email)
     item = LOGIN_ATTEMPTS.get(key)
     now = time()
@@ -83,6 +133,22 @@ def login_block_seconds(email):
 
 
 def register_login_failure(email):
+    client = _redis_client()
+    if client is not None:
+        attempts_key, lock_key = _redis_login_keys(email)
+        try:
+            pipeline = client.pipeline()
+            pipeline.incr(attempts_key)
+            pipeline.ttl(attempts_key)
+            count, ttl = pipeline.execute()
+            if int(ttl) < 0:
+                client.expire(attempts_key, LOGIN_WINDOW_SECONDS)
+            if int(count) >= LOGIN_MAX_ATTEMPTS:
+                client.set(lock_key, "1", ex=LOGIN_LOCK_SECONDS)
+                return LOGIN_LOCK_SECONDS
+            return 0
+        except Exception:
+            pass
     key = login_attempt_key(email)
     now = time()
     item = LOGIN_ATTEMPTS.get(key)
@@ -96,6 +162,13 @@ def register_login_failure(email):
 
 
 def clear_login_failures(email):
+    client = _redis_client()
+    if client is not None:
+        attempts_key, lock_key = _redis_login_keys(email)
+        try:
+            client.delete(attempts_key, lock_key)
+        except Exception:
+            pass
     LOGIN_ATTEMPTS.pop(login_attempt_key(email), None)
 
 

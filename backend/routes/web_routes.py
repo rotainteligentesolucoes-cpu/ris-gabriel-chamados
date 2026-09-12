@@ -2,6 +2,7 @@
 from io import BytesIO
 import json
 import unicodedata
+import zipfile
 from decimal import Decimal
 from functools import wraps
 from datetime import datetime, timedelta
@@ -21,13 +22,13 @@ from sqlalchemy import or_
 
 load_dotenv()
 
-from auth.security import clear_login_failures, login_block_seconds, register_login_failure, start_user_session
+from auth.security import clear_login_failures, login_block_seconds, password_validation_error, register_login_failure, start_user_session
 from database.database import db
 from models.client import Client
 from models.company import Company, CompanyBase
 from models.operation import ManualLocation, Merchandise, MerchandiseScan, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteTransfer, StopObservation, StopProof, TelemetryEvent
 from models.route import LogisticRoute, RouteStop
-from models.saas import AuditLog, CompanySubscription, PlatformEvent, SubscriptionPlan
+from models.saas import AuditLog, CompanySubscription, PlatformEvent, SubscriptionPayment, SubscriptionPlan
 from services.security_alerts import route_alert_recipient_emails, send_route_access_alert_async
 from models.user import User
 from models.vehicle import Vehicle
@@ -201,6 +202,35 @@ def uploaded_file_size(file_storage):
     return size
 
 
+def upload_content_matches_extension(file_storage, extension):
+    stream = file_storage.stream
+    current = stream.tell()
+    try:
+        stream.seek(0)
+        header = stream.read(4096)
+        if extension == ".pdf":
+            return b"%PDF-" in header[:1024]
+        if extension in (".jpg", ".jpeg"):
+            return header.startswith(b"\xff\xd8\xff")
+        if extension == ".png":
+            return header.startswith(b"\x89PNG\r\n\x1a\n")
+        if extension == ".webp":
+            return header.startswith(b"RIFF") and header[8:12] == b"WEBP"
+        if extension == ".xml":
+            normalized = header.lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+            return normalized.startswith((b"<?xml", b"<")) and b"<!doctype" not in normalized and b"<!entity" not in normalized
+        if extension == ".xlsx":
+            stream.seek(0)
+            with zipfile.ZipFile(stream) as workbook:
+                names = set(workbook.namelist())
+                return "[Content_Types].xml" in names and "xl/workbook.xml" in names
+        return False
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return False
+    finally:
+        stream.seek(current)
+
+
 def validate_upload(file_storage, allowed_extensions, max_mb):
     if not file_storage or not file_storage.filename:
         return None, "Arquivo nao informado."
@@ -212,6 +242,8 @@ def validate_upload(file_storage, allowed_extensions, max_mb):
     max_bytes = max_mb * 1024 * 1024
     if uploaded_file_size(file_storage) > max_bytes:
         return None, f"Arquivo maior que {max_mb} MB."
+    if not upload_content_matches_extension(file_storage, extension):
+        return None, "O conteudo do arquivo nao corresponde ao formato informado."
     return filename, None
 
 
@@ -453,6 +485,7 @@ BACKUP_MODELS = [
     ("public_insights", PublicInsight),
     ("subscription_plans", SubscriptionPlan),
     ("company_subscriptions", CompanySubscription),
+    ("subscription_payments", SubscriptionPayment),
     ("audit_logs", AuditLog),
     ("platform_events", PlatformEvent),
 ]
@@ -2118,14 +2151,74 @@ def saas_production_page():
     notice = ""
     if request.method == "POST":
         company_id = request.form.get("company_id", type=int)
-        plan_id = request.form.get("plan_id", type=int)
-        status = request.form.get("status", "trial").strip() or "trial"
-        payment_status = request.form.get("payment_status", "pending").strip().lower()
-        if payment_status not in ("pending", "paid", "overdue", "cancelled"):
-            payment_status = "pending"
         company = Company.query.get(company_id)
-        plan = SubscriptionPlan.query.get(plan_id) if plan_id else None
-        if company:
+        form_action = request.form.get("form_action", "subscription")
+        if company and form_action == "payment":
+            subscription = CompanySubscription.query.filter_by(company_id=company.id).first()
+            payment_status = request.form.get("payment_status", "pending").strip().lower()
+            billing_period = request.form.get("billing_period", "").strip()
+            due_date = request.form.get("due_date", "").strip()
+            amount_raw = request.form.get("amount", "").strip()
+            try:
+                datetime.strptime(billing_period, "%Y-%m")
+                datetime.strptime(due_date, "%Y-%m-%d")
+                normalized_amount = amount_raw.replace(".", "").replace(",", ".") if "," in amount_raw else amount_raw
+                amount = Decimal(normalized_amount)
+                if amount <= 0:
+                    raise ValueError
+                if payment_status not in ("pending", "paid", "overdue", "cancelled"):
+                    raise ValueError
+                if not subscription:
+                    raise LookupError
+                payment = SubscriptionPayment.query.filter_by(
+                    subscription_id=subscription.id,
+                    billing_period=billing_period,
+                ).first()
+                if not payment:
+                    payment = SubscriptionPayment(
+                        subscription_id=subscription.id,
+                        company_id=company.id,
+                        billing_period=billing_period,
+                        due_date=due_date,
+                        amount=amount,
+                    )
+                    db.session.add(payment)
+                payment.due_date = due_date
+                payment.amount = amount
+                payment.payment_method = "pix"
+                payment.status = payment_status
+                payment.reference = request.form.get("payment_reference", "").strip()[:120] or None
+                payment.notes = request.form.get("payment_notes", "").strip() or None
+                if payment_status == "paid" and not payment.paid_at:
+                    payment.paid_at = datetime.utcnow()
+                subscription.payment_status = payment_status
+                subscription.payment_reference = payment.reference
+                if payment_status == "paid":
+                    subscription.last_payment_at = payment.paid_at
+                db.session.flush()
+                audit_event(
+                    "subscription_payment_update",
+                    user=user,
+                    company_id=company.id,
+                    resource_type="subscription_payment",
+                    resource_id=payment.id,
+                    details=f"Competencia: {billing_period} | PIX: {payment_status} | Valor: {amount}",
+                )
+                db.session.commit()
+                notice = "<div class='badge badge-success'>Cobranca PIX registrada no historico.</div>"
+            except LookupError:
+                db.session.rollback()
+                notice = "<div class='badge badge-danger'>Cadastre primeiro a assinatura desta empresa.</div>"
+            except (ValueError, ArithmeticError):
+                db.session.rollback()
+                notice = "<div class='badge badge-danger'>Confira competencia, vencimento, valor e situacao da cobranca.</div>"
+        elif company:
+            plan_id = request.form.get("plan_id", type=int)
+            status = request.form.get("status", "trial").strip() or "trial"
+            payment_status = request.form.get("payment_status", "pending").strip().lower()
+            if payment_status not in ("pending", "paid", "overdue", "cancelled"):
+                payment_status = "pending"
+            plan = SubscriptionPlan.query.get(plan_id) if plan_id else None
             subscription = CompanySubscription.query.filter_by(company_id=company.id).first()
             if not subscription:
                 subscription = CompanySubscription(company_id=company.id)
@@ -2248,6 +2341,32 @@ def saas_production_page():
         """
         for subscription in subscriptions
     ) or "<tr><td colspan='7'>Nenhuma assinatura cadastrada.</td></tr>"
+    subscription_options = "".join(
+        f"<option value='{subscription.company_id}'>{escape(subscription.company.name if subscription.company else str(subscription.company_id))}</option>"
+        for subscription in subscriptions
+    )
+    payment_labels = {
+        "pending": "PIX pendente",
+        "paid": "PIX recebido",
+        "overdue": "PIX vencido",
+        "cancelled": "Cancelado",
+    }
+    payment_rows = "".join(
+        f"""
+        <tr>
+            <td>{escape(payment.company.name if payment.company else '-')}</td>
+            <td>{escape(payment.billing_period)}</td>
+            <td>{display_date(payment.due_date)}</td>
+            <td>{format_money(payment.amount)}</td>
+            <td>{escape(payment_labels.get(payment.status, payment.status))}</td>
+            <td>{escape(payment.reference or '-')}</td>
+            <td>{payment.paid_at.strftime('%d/%m/%Y %H:%M') if payment.paid_at else '-'}</td>
+        </tr>
+        """
+        for payment in SubscriptionPayment.query.order_by(SubscriptionPayment.billing_period.desc(), SubscriptionPayment.id.desc()).limit(100).all()
+    ) or "<tr><td colspan='7'>Nenhuma cobranca mensal registrada.</td></tr>"
+    current_period = datetime.utcnow().strftime("%Y-%m")
+    default_due_date = datetime.utcnow().strftime("%Y-%m-") + "10"
 
     pix_key_masked = "Nao configurada"
     if pix_key_configured:
@@ -2372,6 +2491,7 @@ def saas_production_page():
         </div>
         {notice}
         <form class="saas-form" method="post">
+            <input name="form_action" type="hidden" value="subscription">
             <div><label>Empresa</label><select name="company_id" required>{company_options}</select></div>
             <div><label>Plano</label><select name="plan_id">{plan_options}</select></div>
             <div><label>Status</label><select name="status"><option value="trial">Trial</option><option value="active">Ativa</option><option value="past_due">Pendente</option><option value="paused">Pausada</option><option value="cancelled">Cancelada</option></select></div>
@@ -2386,6 +2506,28 @@ def saas_production_page():
             <table class="table">
                 <thead><tr><th>Empresa</th><th>Plano</th><th>Assinatura</th><th>Pagamento</th><th>Cobranca</th><th>Renovacao</th><th>Ultimo PIX</th></tr></thead>
                 <tbody>{subscription_rows}</tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+        <h2>Historico mensal de cobrancas PIX</h2>
+        <p class="muted">Cada competencia fica registrada separadamente. Salvar novamente a mesma empresa e competencia atualiza apenas aquela cobranca.</p>
+        <form class="saas-form" method="post">
+            <input name="form_action" type="hidden" value="payment">
+            <div><label>Empresa</label><select name="company_id" required>{subscription_options}</select></div>
+            <div><label>Competencia</label><input name="billing_period" type="month" value="{current_period}" required></div>
+            <div><label>Vencimento</label><input name="due_date" type="date" value="{default_due_date}" required></div>
+            <div><label>Valor</label><input name="amount" type="number" min="0.01" step="0.01" required></div>
+            <div><label>Situacao</label><select name="payment_status"><option value="pending">PIX pendente</option><option value="paid">PIX recebido</option><option value="overdue">PIX vencido</option><option value="cancelled">Cancelado</option></select></div>
+            <button class="btn" type="submit">Registrar</button>
+            <div style="grid-column:1/-1;"><label>Referencia PIX</label><input name="payment_reference" maxlength="120" placeholder="ID da transferencia ou referencia do comprovante"></div>
+            <div style="grid-column:1/-1;"><label>Observacao</label><input name="payment_notes" placeholder="Informacao interna desta competencia"></div>
+        </form>
+        <div class="table-wrap" style="margin-top:14px;">
+            <table class="table">
+                <thead><tr><th>Empresa</th><th>Competencia</th><th>Vencimento</th><th>Valor</th><th>Situacao</th><th>Referencia</th><th>Recebido em</th></tr></thead>
+                <tbody>{payment_rows}</tbody>
             </table>
         </div>
     </section>
@@ -2438,6 +2580,19 @@ def my_subscription_page():
             <button class='btn' type='button' onclick="navigator.clipboard.writeText(document.getElementById('ris-pix-key').value);this.textContent='Copiado';">Copiar chave PIX</button>
         </div>
         """
+    payment_history_rows = "".join(
+        f"""
+        <tr>
+            <td>{escape(payment.billing_period)}</td>
+            <td>{display_date(payment.due_date)}</td>
+            <td>{format_money(payment.amount)}</td>
+            <td>{escape(payment_labels.get(payment.status, payment.status))}</td>
+            <td>{escape(payment.reference or '-')}</td>
+            <td>{payment.paid_at.strftime('%d/%m/%Y') if payment.paid_at else '-'}</td>
+        </tr>
+        """
+        for payment in SubscriptionPayment.query.filter_by(subscription_id=subscription.id).order_by(SubscriptionPayment.billing_period.desc()).limit(24).all()
+    ) or "<tr><td colspan='6'>Nenhuma cobranca mensal registrada ainda.</td></tr>"
 
     body = f"""
     <section class='card'>
@@ -2455,6 +2610,15 @@ def my_subscription_page():
         <p><strong>Recebedor:</strong> {escape(receiver)}<br><strong>Cidade:</strong> {escape(city)}</p>
         {pix_content}
         <p class='muted' style='margin-top:12px;'>{escape(instructions)}</p>
+    </section>
+    <section class='card'>
+        <h2>Historico de cobrancas</h2>
+        <div class='table-wrap'>
+            <table class='table'>
+                <thead><tr><th>Competencia</th><th>Vencimento</th><th>Valor</th><th>Situacao</th><th>Referencia</th><th>Pagamento</th></tr></thead>
+                <tbody>{payment_history_rows}</tbody>
+            </table>
+        </div>
     </section>
     """
     return layout("Assinatura / PIX", body, "assinatura")
@@ -2949,8 +3113,9 @@ def collaborators_page():
                 raise ValueError("Selecione a empresa.")
             if not name or not email or not password:
                 raise ValueError("Informe nome, login e senha.")
-            if len(password) < 6:
-                raise ValueError("Use uma senha com pelo menos 6 caracteres.")
+            password_error = password_validation_error(password)
+            if password_error:
+                raise ValueError(password_error)
             if not can_assign_role(user, role):
                 raise ValueError("Seu perfil nao pode criar este tipo de usuario.")
             if not user.is_master and getattr(user, "base_id", None) and role_level(user) < 3:
@@ -3098,7 +3263,7 @@ def collaborators_page():
                 {base_field}
                 <label>Nome<input name='name' required placeholder='Nome do colaborador'></label>
                 <label>Email ou login<input name='email' required placeholder='ex: operador01 ou email@empresa.com'></label>
-                <label>Senha temporaria<input name='password' type='password' required placeholder='Minimo 6 caracteres'></label>
+                <label>Senha temporaria<input name='password' type='password' minlength='10' required placeholder='Minimo 10 caracteres'></label>
                 <label>Perfil<select name='role'>{collaborator_role_options(user)}</select></label>
                 {finance_access_field}
                 <button class='btn' type='submit'>Cadastrar colaborador</button>
@@ -3163,8 +3328,9 @@ def collaborator_edit_page(collaborator_id):
             if existing:
                 raise ValueError("Este login ja esta cadastrado em outro usuario.")
             if password:
-                if len(password) < 6:
-                    raise ValueError("Use uma senha com pelo menos 6 caracteres.")
+                password_error = password_validation_error(password)
+                if password_error:
+                    raise ValueError(password_error)
                 collaborator.password = generate_password_hash(password)
                 collaborator.active_session_id = None
                 collaborator.active_session_started_at = None
@@ -4106,6 +4272,8 @@ def delete_client_page():
     client = Client.query.get_or_404(request.form.get("client_id", type=int))
     if not can_access_company(user, client.company_id):
         return layout("Acesso negado", "<div class='card'><h2>Cliente fora da sua permissao.</h2></div>", "clientes"), 403
+    if client.base_id and not can_access_base(user, client.base_id):
+        return layout("Acesso negado", "<div class='card'><h2>Cliente fora da sua base.</h2></div>", "clientes"), 403
 
     has_route_history = RouteStop.query.filter_by(client_id=client.id).first() is not None
     if has_route_history:
@@ -10511,10 +10679,15 @@ def reset_password_page():
         new_password = request.form.get("new_password", "")
         if not target:
             message = "Usuario nao encontrado."
-        elif len(new_password) < 6:
-            message = "A nova senha deve ter pelo menos 6 caracteres."
+        elif password_validation_error(new_password):
+            message = password_validation_error(new_password)
         else:
             target.password = generate_password_hash(new_password)
+            target.active_session_id = None
+            target.active_session_started_at = None
+            target.active_session_ip = None
+            target.active_session_user_agent = None
+            audit_event("password_reset", user=user, company_id=target.company_id, resource_type="user", resource_id=target.id, details=f"Senha redefinida para {target.email}; sessoes anteriores encerradas.")
             db.session.commit()
             message = f"Senha redefinida para {target.email}."
     users = User.query.order_by(User.email).all()
@@ -10528,7 +10701,7 @@ def reset_password_page():
             <label>Usuario</label>
             <select name='user_id' required>{options}</select>
             <label>Nova senha</label>
-            <input name='new_password' type='text' required placeholder='Digite a nova senha'>
+            <input name='new_password' type='password' minlength='10' autocomplete='new-password' required placeholder='Minimo 10 caracteres'>
             <button class='btn' type='submit'>Redefinir senha</button>
         </form>
     </div>

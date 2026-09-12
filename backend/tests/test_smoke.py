@@ -2,6 +2,8 @@ import os
 import re
 import tempfile
 import unittest
+from decimal import Decimal
+from io import BytesIO
 from unittest.mock import patch
 
 import jwt
@@ -17,11 +19,15 @@ os.environ["BACKUP_ENABLED"] = "false"
 os.environ["APP_ENV"] = "testing"
 
 from main import app, db  # noqa: E402
-from models.company import Company  # noqa: E402
+from models.client import Client  # noqa: E402
+from models.company import Company, CompanyBase  # noqa: E402
 from models.route import LogisticRoute  # noqa: E402
-from models.saas import AuditLog, CompanySubscription, SubscriptionPlan  # noqa: E402
+from models.saas import AuditLog, CompanySubscription, SubscriptionPayment, SubscriptionPlan  # noqa: E402
 from models.user import User  # noqa: E402
 from models.vehicle import Vehicle  # noqa: E402
+from routes.web_routes import validate_upload  # noqa: E402
+from auth.security import password_validation_error  # noqa: E402
+from werkzeug.datastructures import FileStorage  # noqa: E402
 
 
 class ApplicationSmokeTest(unittest.TestCase):
@@ -58,6 +64,29 @@ class ApplicationSmokeTest(unittest.TestCase):
                 active=True,
             )
             db.session.add_all([driver, other_driver, vehicle])
+            first_base = CompanyBase(company_id=company.id, name="Base Permitida", active=True)
+            second_base = CompanyBase(company_id=company.id, name="Base Restrita", active=True)
+            db.session.add_all([first_base, second_base])
+            db.session.flush()
+            manager = User(
+                company_id=company.id,
+                base_id=first_base.id,
+                name="Gerente de Base",
+                email="gerente-base@ris.test",
+                password="nao-utilizada",
+                role="gerente",
+                active=True,
+                active_session_id="sessao-gerente-base",
+            )
+            restricted_client = Client(
+                company_id=company.id,
+                base_id=second_base.id,
+                name="Cliente de Outra Base",
+                latitude=-23.5,
+                longitude=-46.6,
+                active=True,
+            )
+            db.session.add_all([manager, restricted_client])
             db.session.commit()
             other_route = LogisticRoute(
                 company_id=company.id,
@@ -76,6 +105,9 @@ class ApplicationSmokeTest(unittest.TestCase):
                 os.getenv("JWT_SECRET", "ris_jwt_enterprise_2026_multiempresa_chave_segura_local"),
                 algorithm="HS256",
             )
+            cls.manager_id = manager.id
+            cls.manager_session_id = manager.active_session_id
+            cls.restricted_client_id = restricted_client.id
 
     @classmethod
     def tearDownClass(cls):
@@ -150,6 +182,44 @@ class ApplicationSmokeTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/web/saas-producao"))
 
+    def test_master_can_register_monthly_pix_charge(self):
+        with app.app_context():
+            master = User.query.filter_by(role="master").first()
+            company = Company.query.filter_by(email="seguranca@ris.test").first()
+            plan = SubscriptionPlan.query.filter_by(name="Profissional").first()
+            subscription = CompanySubscription.query.filter_by(company_id=company.id).first()
+            if not subscription:
+                subscription = CompanySubscription(company_id=company.id, plan_id=plan.id)
+                db.session.add(subscription)
+                db.session.commit()
+            master_id = master.id
+            company_id = company.id
+        csrf_token = "csrf-pix-history"
+        with self.client.session_transaction() as web_session:
+            web_session["user_id"] = master_id
+            web_session["_csrf_token"] = csrf_token
+
+        response = self.client.post(
+            "/web/saas-producao",
+            data={
+                "csrf_token": csrf_token,
+                "form_action": "payment",
+                "company_id": company_id,
+                "billing_period": "2026-10",
+                "due_date": "2026-10-10",
+                "amount": "699.50",
+                "payment_status": "paid",
+                "payment_reference": "PIX-TESTE-2026-10",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        with app.app_context():
+            payment = SubscriptionPayment.query.filter_by(company_id=company_id, billing_period="2026-10").one()
+            self.assertEqual(payment.amount, Decimal("699.50"))
+            self.assertEqual(payment.status, "paid")
+            self.assertIsNotNone(payment.paid_at)
+
     def test_commercial_plans_exist_without_demo_data(self):
         with app.app_context():
             plans = {
@@ -173,6 +243,61 @@ class ApplicationSmokeTest(unittest.TestCase):
             self.assertEqual(subscription.payment_method, "pix")
             self.assertEqual(subscription.payment_status, "pending")
             db.session.rollback()
+
+    def test_subscription_payment_history_uses_decimal_and_one_row_per_period(self):
+        with app.app_context():
+            company = Company.query.filter_by(email="seguranca@ris.test").first()
+            plan = SubscriptionPlan.query.filter_by(name="Entrada").first()
+            subscription = CompanySubscription.query.filter_by(company_id=company.id).first()
+            if not subscription:
+                subscription = CompanySubscription(company_id=company.id, plan_id=plan.id)
+                db.session.add(subscription)
+                db.session.flush()
+            payment = SubscriptionPayment(
+                subscription_id=subscription.id,
+                company_id=company.id,
+                billing_period="2026-09",
+                due_date="2026-09-10",
+                amount=Decimal("299.90"),
+            )
+            db.session.add(payment)
+            db.session.commit()
+
+            stored = SubscriptionPayment.query.filter_by(subscription_id=subscription.id, billing_period="2026-09").one()
+            self.assertEqual(stored.amount, Decimal("299.90"))
+            self.assertEqual(stored.payment_method, "pix")
+
+    def test_manager_cannot_delete_client_from_another_base(self):
+        csrf_token = "csrf-gerente-base"
+        with self.client.session_transaction() as web_session:
+            web_session["user_id"] = self.manager_id
+            web_session["session_id"] = self.manager_session_id
+            web_session["_csrf_token"] = csrf_token
+
+        response = self.client.post(
+            "/web/clientes/excluir",
+            data={"client_id": self.restricted_client_id, "csrf_token": csrf_token},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        with app.app_context():
+            client = db.session.get(Client, self.restricted_client_id)
+            self.assertTrue(client.active)
+
+    def test_upload_validation_rejects_fake_pdf_and_accepts_pdf_signature(self):
+        fake = FileStorage(stream=BytesIO(b"arquivo malicioso"), filename="documento.pdf")
+        valid = FileStorage(stream=BytesIO(b"%PDF-1.7\nconteudo"), filename="documento.pdf")
+
+        _filename, fake_error = validate_upload(fake, {".pdf"}, 1)
+        valid_filename, valid_error = validate_upload(valid, {".pdf"}, 1)
+
+        self.assertIsNotNone(fake_error)
+        self.assertEqual(valid_filename, "documento.pdf")
+        self.assertIsNone(valid_error)
+
+    def test_new_password_policy_requires_ten_characters(self):
+        self.assertIsNotNone(password_validation_error("curta123"))
+        self.assertIsNone(password_validation_error("senha-segura-2026"))
 
     def test_driver_cannot_create_operational_records(self):
         headers = {"Authorization": f"Bearer {self.driver_token}"}

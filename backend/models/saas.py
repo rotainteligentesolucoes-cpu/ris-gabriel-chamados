@@ -7,7 +7,7 @@ class SubscriptionPlan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False, unique=True)
     description = db.Column(db.Text, nullable=True)
-    monthly_price = db.Column(db.Float, default=0)
+    monthly_price = db.Column(db.Numeric(12, 2), default=0)
     max_companies = db.Column(db.Integer, nullable=True)
     max_bases = db.Column(db.Integer, nullable=True)
     max_users = db.Column(db.Integer, nullable=True)
@@ -21,7 +21,7 @@ class SubscriptionPlan(db.Model):
             "id": self.id,
             "name": self.name,
             "description": self.description,
-            "monthly_price": self.monthly_price,
+            "monthly_price": float(self.monthly_price or 0),
             "max_companies": self.max_companies,
             "max_bases": self.max_bases,
             "max_users": self.max_users,
@@ -54,6 +54,7 @@ class CompanySubscription(db.Model):
 
     company = db.relationship("Company")
     plan = db.relationship("SubscriptionPlan")
+    payments = db.relationship("SubscriptionPayment", back_populates="subscription", lazy=True)
 
     def to_dict(self):
         return {
@@ -69,6 +70,49 @@ class CompanySubscription(db.Model):
             "payment_status": self.payment_status,
             "payment_reference": self.payment_reference,
             "last_payment_at": self.last_payment_at.isoformat() if self.last_payment_at else None,
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class SubscriptionPayment(db.Model):
+    __tablename__ = "subscription_payments"
+    __table_args__ = (
+        db.UniqueConstraint("subscription_id", "billing_period", name="uq_subscription_payment_period"),
+        db.Index("ix_subscription_payments_company_due", "company_id", "due_date"),
+        db.Index("ix_subscription_payments_status_due", "status", "due_date"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    subscription_id = db.Column(db.Integer, db.ForeignKey("company_subscriptions.id"), nullable=False)
+    company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
+    billing_period = db.Column(db.String(7), nullable=False)
+    due_date = db.Column(db.String(10), nullable=False)
+    amount = db.Column(db.Numeric(12, 2), nullable=False)
+    payment_method = db.Column(db.String(20), default="pix", nullable=False)
+    status = db.Column(db.String(30), default="pending", nullable=False)
+    reference = db.Column(db.String(120), nullable=True)
+    paid_at = db.Column(db.DateTime, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime, server_default=db.func.now(), onupdate=db.func.now())
+
+    subscription = db.relationship("CompanySubscription", back_populates="payments")
+    company = db.relationship("Company")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "subscription_id": self.subscription_id,
+            "company_id": self.company_id,
+            "billing_period": self.billing_period,
+            "due_date": self.due_date,
+            "amount": str(self.amount),
+            "payment_method": self.payment_method,
+            "status": self.status,
+            "reference": self.reference,
+            "paid_at": self.paid_at.isoformat() if self.paid_at else None,
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

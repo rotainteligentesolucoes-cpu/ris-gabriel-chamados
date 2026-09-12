@@ -1,7 +1,7 @@
 ﻿from flask import Blueprint, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from auth.security import clear_login_failures, create_token, login_block_seconds, login_required, master_required, register_login_failure, resolve_company_id, start_user_session
+from auth.security import clear_login_failures, create_token, login_block_seconds, login_required, master_required, password_validation_error, register_login_failure, resolve_company_id, start_user_session
 from database.database import db
 from models.company import Company
 from models.user import User
@@ -47,6 +47,10 @@ def create_user():
 
     if User.query.filter_by(email=data["email"].strip().lower()).first():
         return jsonify({"error": "Email ja cadastrado"}), 400
+
+    password_error = password_validation_error(data["password"])
+    if password_error:
+        return jsonify({"error": password_error}), 400
 
     company_id = resolve_company_id(data)
     role = data["role"]
