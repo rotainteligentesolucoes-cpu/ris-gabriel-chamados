@@ -26,7 +26,7 @@ Tambem deixar o sistema preparado para operacao 24/7, com banco PostgreSQL, back
 6. Usar o comando:
 
 ```bash
-gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+python migrate.py && AUTO_INITIALIZE_DATABASE=false BACKUP_SCHEDULER_MODE=gunicorn gunicorn wsgi:app --config gunicorn.conf.py
 ```
 
 ## Variaveis obrigatorias
@@ -214,7 +214,7 @@ Environment > Environment Variables.
 Use:
 
 ```bash
-gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+python migrate.py && AUTO_INITIALIZE_DATABASE=false BACKUP_SCHEDULER_MODE=gunicorn gunicorn wsgi:app --config gunicorn.conf.py
 ```
 
 Em servidores maiores, aumente workers conforme CPU/RAM.

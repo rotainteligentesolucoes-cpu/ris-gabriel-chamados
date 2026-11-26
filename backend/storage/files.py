@@ -1,5 +1,6 @@
 import mimetypes
 import os
+from datetime import timezone
 from io import BytesIO
 
 from flask import send_file
@@ -53,6 +54,60 @@ def _bucket():
 
 def _local_path(safe_category, safe_name):
     return os.path.join(_local_root(), safe_category, safe_name)
+
+
+def _portable_datetime(value):
+    if value is not None and getattr(value, "tzinfo", None) is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def stored_file_info(category, filename):
+    """Return portable metadata for a stored file without downloading it."""
+    key, safe_category, safe_name = _safe_key(category, filename)
+    if _backend() == "s3":
+        try:
+            response = _s3_client().head_object(Bucket=_bucket(), Key=key)
+        except Exception:
+            return None
+        return {
+            "name": safe_name,
+            "size": int(response.get("ContentLength") or 0),
+            "last_modified": _portable_datetime(response.get("LastModified")),
+        }
+
+    path = _local_path(safe_category, safe_name)
+    if not os.path.exists(path):
+        return None
+    return {
+        "name": safe_name,
+        "size": os.path.getsize(path),
+        "last_modified": None,
+    }
+
+
+def latest_stored_file(category, prefix="", suffix=""):
+    """Return metadata for the newest matching object in external storage."""
+    if _backend() != "s3":
+        return None
+    safe_category = secure_filename(category or "files") or "files"
+    storage_prefix = os.getenv("S3_PREFIX", "ris").strip("/")
+    key_prefix = "/".join(part for part in (storage_prefix, safe_category, prefix) if part)
+    try:
+        response = _s3_client().list_objects_v2(Bucket=_bucket(), Prefix=key_prefix)
+    except Exception:
+        return None
+    candidates = []
+    for item in response.get("Contents", []):
+        name = os.path.basename(item.get("Key") or "")
+        if not name or (prefix and not name.startswith(prefix)) or (suffix and not name.endswith(suffix)):
+            continue
+        candidates.append({
+            "name": name,
+            "size": int(item.get("Size") or 0),
+            "last_modified": _portable_datetime(item.get("LastModified")),
+        })
+    return max(candidates, key=lambda item: item["name"], default=None)
 
 
 def save_bytes(data, category, filename, content_type=None):

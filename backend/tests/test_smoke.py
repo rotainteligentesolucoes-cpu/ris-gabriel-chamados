@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from decimal import Decimal
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import jwt
 
@@ -17,8 +17,9 @@ os.environ["SEED_DEMO_DATA"] = "false"
 os.environ["RUN_MIGRATIONS"] = "true"
 os.environ["BACKUP_ENABLED"] = "false"
 os.environ["APP_ENV"] = "testing"
+os.environ["AUTO_INITIALIZE_DATABASE"] = "true"
 
-from main import app, db  # noqa: E402
+from main import app, db, initialize_database  # noqa: E402
 from models.client import Client  # noqa: E402
 from models.company import Company, CompanyBase  # noqa: E402
 from models.route import LogisticRoute  # noqa: E402
@@ -27,6 +28,7 @@ from models.user import User  # noqa: E402
 from models.vehicle import Vehicle  # noqa: E402
 from routes.web_routes import validate_upload  # noqa: E402
 from auth.security import password_validation_error  # noqa: E402
+from storage.files import latest_stored_file, stored_file_info  # noqa: E402
 from werkzeug.datastructures import FileStorage  # noqa: E402
 
 
@@ -127,6 +129,12 @@ class ApplicationSmokeTest(unittest.TestCase):
         self.assertEqual(health.get_json()["status"], "ok")
         self.assertEqual(readiness.status_code, 200)
         self.assertEqual(readiness.get_json()["database"], "ok")
+
+    def test_database_initialization_is_idempotent(self):
+        initialize_database()
+        initialize_database()
+        with app.app_context():
+            self.assertEqual(SubscriptionPlan.query.filter_by(name="Entrada").count(), 1)
 
     def test_login_page_receives_csrf_token(self):
         response = self.client.get("/login")
@@ -298,6 +306,24 @@ class ApplicationSmokeTest(unittest.TestCase):
     def test_new_password_policy_requires_ten_characters(self):
         self.assertIsNotNone(password_validation_error("curta123"))
         self.assertIsNone(password_validation_error("senha-segura-2026"))
+
+    def test_s3_backup_metadata_survives_without_local_file(self):
+        client = MagicMock()
+        client.head_object.return_value = {"ContentLength": 54321}
+        client.list_objects_v2.return_value = {
+            "Contents": [
+                {"Key": "ris/backups/ris_backup_20260920_024302.json", "Size": 54321},
+                {"Key": "ris/backups/ris_backup_20260921_024302.json", "Size": 65432},
+            ]
+        }
+        with patch.dict(os.environ, {"STORAGE_BACKEND": "s3", "S3_BUCKET": "ris-test"}), \
+                patch("storage.files._s3_client", return_value=client):
+            info = stored_file_info("backups", "ris_backup_20260921_024302.json")
+            latest = latest_stored_file("backups", prefix="ris_backup_", suffix=".json")
+
+        self.assertEqual(info["size"], 54321)
+        self.assertEqual(latest["name"], "ris_backup_20260921_024302.json")
+        self.assertEqual(latest["size"], 65432)
 
     def test_driver_cannot_create_operational_records(self):
         headers = {"Authorization": f"Bearer {self.driver_token}"}

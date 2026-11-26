@@ -1,10 +1,10 @@
 import os
 
-from flask_migrate import upgrade
+os.environ["AUTO_INITIALIZE_DATABASE"] = "false"
+os.environ["BACKUP_SCHEDULER_MODE"] = "external"
 
-from main import app
+from main import initialize_database
 
 
-with app.app_context():
-    upgrade(directory=os.path.join(os.path.dirname(__file__), "migrations"))
+initialize_database()
 

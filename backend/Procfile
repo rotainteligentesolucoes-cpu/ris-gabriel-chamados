@@ -1,1 +1,1 @@
-web: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+web: python migrate.py && AUTO_INITIALIZE_DATABASE=false BACKUP_SCHEDULER_MODE=gunicorn gunicorn wsgi:app --config gunicorn.conf.py

@@ -1,4 +1,5 @@
 ﻿import os
+from contextlib import contextmanager
 from datetime import timedelta
 
 from flask import Flask, jsonify, request
@@ -9,7 +10,7 @@ from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.security import generate_password_hash
 
 from database.database import db
-from models import AuditLog, Client, Company, CompanyBase, CompanySubscription, LogisticRoute, ManualLocation, Merchandise, MerchandiseScan, PlatformEvent, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteStop, RouteTransfer, StopObservation, StopProof, SubscriptionPlan, TelemetryEvent, User, Vehicle
+from models import AuditLog, Client, Company, CompanyBase, CompanySubscription, LogisticRoute, ManualLocation, Merchandise, MerchandiseScan, PlatformEvent, PublicContactRequest, PublicInsight, ReportSnapshot, RouteBreak, RouteStop, RouteTransfer, StopObservation, StopProof, SubscriptionPayment, SubscriptionPlan, TelemetryEvent, User, Vehicle
 from routes.client_routes import client_bp
 from routes.company_routes import company_bp
 from routes.route_routes import route_bp
@@ -569,22 +570,57 @@ def seed_public_insights():
     db.session.commit()
 
 
-with app.app_context():
-    db.create_all()
-    ensure_sqlite_schema()
-    ensure_postgres_schema()
-    if os.getenv("RUN_MIGRATIONS", "true").strip().lower() in ("1", "true", "yes", "sim"):
-        upgrade(directory=os.path.join(os.path.dirname(__file__), "migrations"))
-    if os.getenv("RESTORE_MODE", "false").strip().lower() not in ("1", "true", "yes", "sim"):
-        seed_master_user()
-        seed_public_insights()
-        seed_subscription_plans()
-        if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
-            seed_demo_data()
+DATABASE_INITIALIZATION_LOCK_ID = 7_420_260_912
+
+
+@contextmanager
+def database_initialization_lock():
+    """Serialize schema initialization across concurrent production workers."""
+    connection = None
+    if str(db.engine.url).startswith("postgresql"):
+        connection = db.engine.connect()
+        connection.execute(
+            db.text("SELECT pg_advisory_lock(:lock_id)"),
+            {"lock_id": DATABASE_INITIALIZATION_LOCK_ID},
+        )
+    try:
+        yield
+    finally:
+        if connection is not None:
+            try:
+                connection.execute(
+                    db.text("SELECT pg_advisory_unlock(:lock_id)"),
+                    {"lock_id": DATABASE_INITIALIZATION_LOCK_ID},
+                )
+            finally:
+                connection.close()
+
+
+def initialize_database():
+    """Create, migrate and seed the database exactly once per deployment command."""
+    with app.app_context():
+        with database_initialization_lock():
+            db.create_all()
+            ensure_sqlite_schema()
+            ensure_postgres_schema()
+            if os.getenv("RUN_MIGRATIONS", "true").strip().lower() in ("1", "true", "yes", "sim"):
+                upgrade(directory=os.path.join(os.path.dirname(__file__), "migrations"))
+            if os.getenv("RESTORE_MODE", "false").strip().lower() not in ("1", "true", "yes", "sim"):
+                seed_master_user()
+                seed_public_insights()
+                seed_subscription_plans()
+                if os.getenv("SEED_DEMO_DATA", "true").lower() == "true":
+                    seed_demo_data()
+
+
+# Compatibility fallback for local execution and Render services still using the old start command.
+if os.getenv("AUTO_INITIALIZE_DATABASE", "true").strip().lower() in ("1", "true", "yes", "sim"):
+    initialize_database()
 
 from services.backup_scheduler import start_backup_scheduler
 
-start_backup_scheduler(app)
+if os.getenv("BACKUP_SCHEDULER_MODE", "app").strip().lower() == "app":
+    start_backup_scheduler(app, singleton=IS_PRODUCTION)
 
 
 @app.route("/api/status")

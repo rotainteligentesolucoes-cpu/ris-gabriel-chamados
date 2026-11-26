@@ -32,7 +32,7 @@ from models.saas import AuditLog, CompanySubscription, PlatformEvent, Subscripti
 from services.security_alerts import route_alert_recipient_emails, send_route_access_alert_async
 from models.user import User
 from models.vehicle import Vehicle
-from storage.files import save_bytes, save_upload, send_stored_file
+from storage.files import latest_stored_file, save_bytes, save_upload, send_stored_file, stored_file_info
 
 web_bp = Blueprint("web_bp", __name__)
 
@@ -518,6 +518,10 @@ def backup_file_path(filename):
 
 
 def latest_backup_file():
+    if os.getenv("STORAGE_BACKEND", "local").strip().lower() == "s3":
+        info = latest_stored_file("backups", prefix="ris_backup_", suffix=".json")
+        if info:
+            return info["name"], None, info.get("last_modified")
     directory = backup_directory()
     filenames = [
         name for name in os.listdir(directory)
@@ -1072,7 +1076,7 @@ def login_page():
         contact_notice = "<div class='contact-ok'>Solicitacao enviada. Nossa equipe retornara pelo contato informado.</div>"
     if request.args.get("sessao") == "encerrada":
         error = "Sessao encerrada: este usuario entrou em outra maquina ou navegador."
-    side_state = " login-open contact-open" if contact_notice else (" login-open" if error else "")
+    side_state = " login-open contact-open" if contact_notice else (" login-open" if error or request.args.get("acesso") == "1" else "")
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
@@ -1708,7 +1712,7 @@ def areas_page():
         """
 
     mvp_steps = [
-        mvp_step("1", "Login e perfis", "Cada usuario entra direto no perfil liberado: operacional, gerencia, CEO ou motorista.", "/areas"),
+        mvp_step("1", "Login e perfis", "Cada usuario entra direto no perfil liberado: operacional, gerencia, CEO ou motorista.", url_for("web_bp.login_page", acesso="1")),
         mvp_step("2", "Gestao operacional", "Torre do dia com rotas, mapa, linha do tempo, alertas, intervalos e execucao.", "/web/operacao"),
         mvp_step("3", "Simulacao / importacao / exportacao", "Importa planilha, simula rotas, ajusta custo/tempo e exporta o resultado.", "/web/simulacao"),
         mvp_step("4", "Motorista no celular", "Responsavel assume a rota, registra chegada, saida, observacoes, telemetria e comprovantes.", "/motorista"),
@@ -2251,7 +2255,8 @@ def saas_production_page():
     env = os.getenv("ENV", "development")
     backup_enabled = os.getenv("BACKUP_ENABLED", "").strip().lower() in ("1", "true", "sim", "yes")
     backup_filename, backup_path, backup_at = latest_backup_file()
-    backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
+    backup_info = stored_file_info("backups", backup_filename) if backup_filename else None
+    backup_size = backup_info["size"] if backup_info else 0
     automatic_backup = (
         PlatformEvent.query
         .filter_by(category="backup", title="Backup automatico diario concluido", resolved=True)
@@ -2271,7 +2276,8 @@ def saas_production_page():
             backup_filename = automatic_filename
             backup_path = backup_file_path(automatic_filename)
             backup_at = automatic_backup_at
-            backup_size = os.path.getsize(backup_path) if backup_path and os.path.exists(backup_path) else 0
+            backup_info = stored_file_info("backups", automatic_filename)
+            backup_size = backup_info["size"] if backup_info else 0
     default_readyz_url = "https://app.rotainteligentesolucoes.com.br/readyz"
     monitoring_target = os.getenv("UPTIME_MONITOR_URL", "").strip() or os.getenv("MONITORING_URL", "").strip()
     monitoring_enabled = bool(monitoring_target)
